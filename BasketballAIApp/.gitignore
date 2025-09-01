@@ -1,0 +1,8 @@
+/clips/
+/Datasets/
+/Models/
+/Trainings/runs/
+*.pt
+.idea/
+**/__pycache__/
+*.pyc
