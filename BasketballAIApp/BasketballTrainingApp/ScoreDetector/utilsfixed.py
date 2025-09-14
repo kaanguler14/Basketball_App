@@ -2,6 +2,7 @@
 import math
 import numpy as np
 import torch
+import cv2
 
 def get_device():
     """Automatically select devices"""
@@ -106,7 +107,7 @@ def detect_down(ball_pos, hoop_pos):
     return ball_pos[-1][0][1] > threshold
 
 
-def detect_up(ball_pos, hoop_pos):
+def detect_up(frame,ball_pos, hoop_pos):
     """
     Detect if ball is in the 'up' region (near backboard / release area).
     Made more tolerant (wider x-range and y-range).
@@ -117,10 +118,11 @@ def detect_up(ball_pos, hoop_pos):
     hoop_cx, hoop_cy = hoop_pos[-1][0]
     hoop_w, hoop_h = hoop_pos[-1][2], hoop_pos[-1][3]
 
-    x1 = hoop_cx - 6.0 * hoop_w
-    x2 = hoop_cx + 6.0 * hoop_w
+    x1 = hoop_cx - 4.0 * hoop_w
+    x2 = hoop_cx + 4.0 * hoop_w
     y1 = hoop_cy - 3.0 * hoop_h
-    y2 = hoop_cy - 0.2 * hoop_h  # not too close to rim center
+    y2 = hoop_cy - 1.10 * hoop_h  # not too close to rim center
+    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
 
     bx, by = ball_pos[-1][0]
     return (x1 < bx < x2) and (y1 < by < y2)
@@ -132,6 +134,9 @@ def in_hoop_region(center, hoop_pos):
         return False
     x, y = center
     hoop_cx, hoop_cy = hoop_pos[-1][0]
+    print("-----------------------")
+    print(f"hoop_pos: {hoop_pos}")
+    print("-****************-")
     hoop_w, hoop_h = hoop_pos[-1][2], hoop_pos[-1][3]
 
     x1 = hoop_cx - 1.5 * hoop_w

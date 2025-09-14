@@ -23,7 +23,7 @@ class ShotDetector:
         #self.cap=cv2.VideoCapture(0)
 
         #use video
-        self.cap=cv2.VideoCapture("D://repos//Basketball_App//BasketballAIApp//clips//training7.mp4")
+        self.cap=cv2.VideoCapture("D://repos//Basketball_App//BasketballAIApp//clips//training5.mp4")
 
         self.ball_pos=[] #array of tuples ((x_pos,y_pos)),frame_count,width,height,conf)
         self.hoop_pos=[] #array of tuples ((x_pos,y_pos),frame_count,width,height,conf)
@@ -53,8 +53,11 @@ class ShotDetector:
                 #end of video or an error occured
                 print("Error")
                 break
+            #self.frame = cv2.resize(self.frame, (1080, 720))
+            print(f"self.frame.shape {self.frame.shape}")
             results=self.model(self.frame,stream=True,device=self.device)
             print("okundu")
+
             for r in results:
                 boxes=r.boxes
                 for box in boxes:
@@ -101,18 +104,18 @@ class ShotDetector:
         #clean and display ball motion
         self.ball_pos=clean_ball_pos(self.ball_pos,self.frame_count)
         for i in range(0,len(self.ball_pos)):
-            cv2.circle(self.frame,self.ball_pos[i][0],2,(0,0,255),2)
+            cv2.circle(self.frame,self.ball_pos[i][0],2,(255,0,255),2)
 
         #clean hoop motion and display current hoop center
         if len(self.hoop_pos)>1:
             self.hoop_pos=clean_hoop_pos(self.hoop_pos)
-            cv2.circle(self.frame,self.hoop_pos[-1][0],2,(128,128,0),2)
+            cv2.circle(self.frame,self.hoop_pos[-1][0],2,(0,128,0),2)
 
     def shot_detection(self):
         if len(self.hoop_pos)>0 and len(self.ball_pos)>0:
             #detecting when ball is in up and down area ball can only be in down area after it is in up
             if not self.up:
-                self.up=detect_up(self.ball_pos,self.hoop_pos)
+                self.up=detect_up(self.frame,self.ball_pos,self.hoop_pos)
                 if self.up:
                     self.up_frame=self.ball_pos[-1][1]
 
@@ -122,7 +125,7 @@ class ShotDetector:
                     self.down_frame=self.ball_pos[-1][1]
 
             #if ball goes from up area to down area in that order,increase attemt and reset
-            if self.frame_count%10==0:
+            if self.frame_count%20==0:
                 if self.up and self.down and self.up_frame<self.down_frame:
                     self.attempts+=1
                     self.up=False
