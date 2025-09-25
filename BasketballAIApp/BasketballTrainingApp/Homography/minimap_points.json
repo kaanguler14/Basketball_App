@@ -1,0 +1,34 @@
+{
+  "paint_right": [
+    91,
+    17
+  ],
+  "paint_left": [
+    140,
+    17
+  ],
+  "bottom_left": [
+    203,
+    18
+  ],
+  "bottom_right": [
+    29,
+    17
+  ],
+  "free_throw_right": [
+    91,
+    91
+  ],
+  "free_throw_left": [
+    140,
+    90
+  ],
+  "center_circle": [
+    116,
+    92
+  ],
+  "top_right": [
+    116,
+    126
+  ]
+}
