@@ -13,6 +13,9 @@ Unlike existing apps that only count shots or focus on dribbling, this project f
 - Double counting issue has been resolved
 - A minimap for player and ball visualization has been added (still needs refinement during player jumps)
 
+Demo : https://youtu.be/z2rsAT5oaXs
+  
+
 ## Future Work
 - Improve pose correction using keypoint detection methods
 - Provide personalized training feedback based on body alignment and release angle
