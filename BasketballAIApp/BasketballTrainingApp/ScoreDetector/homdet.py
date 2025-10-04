@@ -9,7 +9,7 @@ from utilsfixed import score, detect_down, detect_up, in_hoop_region, clean_hoop
 
 # ------------------------ CONFIG ------------------------
 court_labels = [
-    "top_left", "top_right", "bottom_right", "bottom_left",
+    "top_left", "top_right","top", "bottom_right", "bottom_left",
     "free_throw_left", "free_throw_right",
     "center_circle", "paint_left", "paint_right"
 ]
@@ -59,17 +59,26 @@ class ShotDetector:
 
     # ------------------------ HOMOGRAPHY ------------------------
     def load_or_select(self, video_frame):
-        force_select = False
-        if os.path.exists(vp_json) and os.path.exists(mp_json):
-            if self.ask_reload():
-                force_select = True
+        video_points_dict, minimap_points_dict = {}, {}
 
-        if not force_select and os.path.exists(vp_json) and os.path.exists(mp_json):
-            with open(vp_json, "r") as f:
-                video_points_dict = json.load(f)
+        # --- Eğer json'lar varsa ---
+        if os.path.exists(vp_json) and os.path.exists(mp_json):
+            if self.ask_reload():  # sadece video için sor
+                # sadece video tekrar seçilir
+                video_points_dict = self.select_points(video_frame, "Video")
+                with open(vp_json, "w") as f:
+                    json.dump(video_points_dict, f, indent=2)
+                print("Video noktaları güncellendi.")
+            else:
+                with open(vp_json, "r") as f:
+                    video_points_dict = json.load(f)
+
+            # minimap hep mevcut dosyadan alınır
             with open(mp_json, "r") as f:
                 minimap_points_dict = json.load(f)
+
         else:
+            # json yoksa her ikisi de seçilir
             video_points_dict = self.select_points(video_frame, "Video")
             minimap_points_dict = self.select_points(self.minimap_img, "Minimap")
             with open(vp_json, "w") as f:
@@ -77,6 +86,8 @@ class ShotDetector:
             with open(mp_json, "w") as f:
                 json.dump(minimap_points_dict, f, indent=2)
             print("Noktalar kaydedildi.")
+
+        # int dönüşümü
         video_points_dict = {k: (int(v[0]), int(v[1])) for k, v in video_points_dict.items()}
         minimap_points_dict = {k: (int(v[0]), int(v[1])) for k, v in minimap_points_dict.items()}
         return video_points_dict, minimap_points_dict
