@@ -25,3 +25,59 @@ Demo : https://youtu.be/z2rsAT5oaXs
 
 ## Models
 - Rim and ball detection --> https://huggingface.co/naakgs/ballAndHoopDetector/tree/main
+
+
+## How to Run
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/your-username/your-repo-name.git
+cd your-repo-name
+```
+
+### 2. Create and activate virtual environment
+
+```bash
+python -m venv venv
+conda create -n basketball-app python=3.12
+source venv/bin/activate   # Linux / Mac
+venv\Scripts\activate      # Windows
+```
+
+### 3. Install dependencies
+
+Install all required libraries from `requirements.txt`:
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Download the models
+
+Rim and ball detection model is hosted on Hugging Face.
+Download it into the `models/` folder:
+
+```bash
+git lfs install
+git clone https://huggingface.co/naakgs/ballAndHoopDetector models/ballAndHoopDetector
+```
+
+### 5. Run the application
+
+Run the main script with your video input:
+
+```bash
+python BasketballAIApp/BasketballTrainingApp/ScoreDetector/homdet.py
+```
+
+### 6. Output
+
+* Hoop and ball are detected with bounding boxes.
+* Ball trajectory and scoring events are displayed on screen.
+* A minimap with player and ball visualization is shown.
+
+### 7. Example Demo
+
+You can check a working demo here:
+[Demo Video](https://youtu.be/z2rsAT5oaXs)
