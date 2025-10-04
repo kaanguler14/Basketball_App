@@ -19,3 +19,6 @@ Unlike existing apps that only count shots or focus on dribbling, this project f
 - Add shot analysis tools (release angle, stability, follow-through evaluation)
 - Enhance minimap projection for smoother tracking
 - Mobile deployment for real-time use
+
+## Models
+- Rim and ball detection --> https://huggingface.co/naakgs/ballAndHoopDetector/tree/main
