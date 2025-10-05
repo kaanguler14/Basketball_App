@@ -1,3 +1,5 @@
+# shot_detector_deepsort.py
+
 from ultralytics import YOLO
 import cv2
 import cvzone
@@ -6,6 +8,10 @@ import numpy as np
 import json
 import os
 from utilsfixed import score, detect_down, detect_up, in_hoop_region, clean_hoop_pos, clean_ball_pos, get_device
+
+# ------------------ DeepSORT ------------------
+from deep_sort_realtime.deepsort_tracker import DeepSort
+
 
 # ------------------------ CONFIG ------------------------
 court_labels = [
@@ -25,6 +31,14 @@ class ShotDetector:
         self.model_ball = YOLO("D://repos//Basketball_App//BasketballAIApp//Trainings//kagglebest.pt")
         self.model_player = YOLO("D://repos//Basketball_App//yolov8s.pt")  # person detection
         self.device = get_device()
+
+        # --- DeepSORT Tracker ---
+        self.deepsort = DeepSort(
+            max_age=60,
+            n_init=2,
+            nms_max_overlap=1.0,
+            max_cosine_distance=0.3
+        )
 
         # --- VIDEO / MINIMAP ---
         self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training2.mp4")
@@ -183,25 +197,33 @@ class ShotDetector:
                         self.hoop_pos.append((center, self.frame_count, w, h, conf))
                         cvzone.cornerRect(self.frame, (x1, y1, w, h))
 
-            # --- PLAYER TRACKING ---
-            results_player = self.model_player.track(self.frame, persist=True, tracker="bytetrack.yaml", device=self.device,conf=0.6)
-            players = []
-            if results_player and results_player[0].boxes.id is not None:
-                for box in results_player[0].boxes:
+            # --- PLAYER DETECTION + DEEPSORT TRACKING ---
+            results_player = self.model_player(self.frame, device=self.device, conf=0.6)[0]
+            detections = []
+            if results_player.boxes is not None:
+                for box in results_player.boxes:
                     cls_index = int(box.cls.cpu().numpy())
-                    cls_name = results_player[0].names[cls_index]
+                    cls_name = results_player.names[cls_index]
                     if cls_name != "person":
                         continue
-
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    cx, cy = (x1+x2)//2, y2
-                    track_id = int(box.id.cpu().numpy())
+                    conf = float(box.conf[0])
+                    detections.append(((x1, y1, x2 - x1, y2 - y1), conf, cls_index))
 
-                    players.append((cx, cy, track_id))
+            tracks = self.deepsort.update_tracks(detections, frame=self.frame)
 
-                    cv2.circle(self.frame, (cx, cy), 5, (0, 255, 255), -1)
-                    cv2.putText(self.frame, f"P{track_id}", (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+            players = []
+            for track in tracks:
+                if not track.is_confirmed():
+                    continue
+                track_id = track.track_id
+                l, t, w, h = track.to_ltwh()
+                cx, cy = int(l + w/2), int(t + h)
+                players.append((cx, cy, track_id))
+
+                cv2.circle(self.frame, (cx, cy), 5, (0, 255, 255), -1)
+                cv2.putText(self.frame, f"P{track_id}", (int(l), int(t) - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
 
             # --- BALL & HOOP CLEANING + SHOT DETECTION ---
             self.clean_motion()
