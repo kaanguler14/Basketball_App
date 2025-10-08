@@ -457,8 +457,12 @@ class ShotDetector:
             
             # Top oyuncuya yakınsa = oyuncuda
             if nearest_dist < HOLDING_THRESHOLD:
+                # İlk kez topu tutuyorsa shooter ID'yi kaydet
+                if not self.ball_with_player:
+                    self.shooter_id = nearest[2] if len(nearest) > 2 else None
+                    print(f"   → Top yakalandı: Oyuncu P{self.shooter_id}")
+                
                 self.ball_with_player = True
-                self.shooter_id = nearest[2] if len(nearest) > 2 else None
                 self.release_detected = False
             
             # Top oyuncudan uzaklaşıyorsa = ŞUT ATILDI!
@@ -495,35 +499,70 @@ class ShotDetector:
                         self.release_detected = True
                         self.release_frame = self.frame_count
                         
-                        # Şut anındaki oyuncu pozisyonunu kaydet
-                        # En iyi pozisyon: topun hala yakın olduğu son frame
+                        # ÖNEMLİ: Şutu atan oyuncunun pozisyonunu bul
+                        # Sadece AYNI OYUNCUYA ait frame'leri kullan (shooter_id ile eşleşenler)
                         best_idx = -1
-                        for i in range(len(self.ball_player_history) - 1, max(0, len(self.ball_player_history) - 4), -1):
-                            if self.ball_player_history[i]['distance'] < HOLDING_THRESHOLD * 1.2:
-                                best_idx = i
+                        shooter_frames = []
+                        
+                        # Geriye doğru git ve shooter_id'ye sahip frame'leri bul
+                        for i in range(len(self.ball_player_history) - 1, -1, -1):
+                            frame_data = self.ball_player_history[i]
+                            # Aynı oyuncu MU? (shooter_id ile eşleşiyor mu?)
+                            if frame_data['player_id'] == self.shooter_id:
+                                # Top bu oyuncuya yakın mıydı?
+                                if frame_data['distance'] < HOLDING_THRESHOLD * 1.3:
+                                    shooter_frames.append(i)
+                                    if best_idx == -1:
+                                        best_idx = i
+                            
+                            # Son 8 frame'e bak (yeterli)
+                            if len(shooter_frames) >= 5:
                                 break
                         
-                        self.release_player_pos = self.ball_player_history[best_idx]['player_pos']
+                        # Eğer shooter'a ait frame bulunamazsa (ID kaydı yoksa), en yakın olanı al
+                        if best_idx == -1:
+                            for i in range(len(self.ball_player_history) - 1, max(0, len(self.ball_player_history) - 4), -1):
+                                if self.ball_player_history[i]['distance'] < HOLDING_THRESHOLD * 1.2:
+                                    best_idx = i
+                                    break
+                        
+                        # En iyi indeksi kullan
+                        if best_idx != -1:
+                            self.release_player_pos = self.ball_player_history[best_idx]['player_pos']
+                            # Shooter ID'yi de doğrula (emin olmak için)
+                            confirmed_shooter_id = self.ball_player_history[best_idx]['player_id']
+                            if confirmed_shooter_id is not None:
+                                self.shooter_id = confirmed_shooter_id
+                        else:
+                            # Fallback: en son pozisyon
+                            self.release_player_pos = self.ball_player_history[-1]['player_pos']
                         
                         # Detaylı log
                         shot_type = "UZAK" if player_to_hoop_dist > 300 else ("ORTA" if player_to_hoop_dist > 200 else "YAKIN")
                         print(f"🏀 {shot_type} ŞUT ATILDI! [Derinlik: {depth_zone}]")
-                        print(f"   Frame: {self.frame_count}, Oyuncu: P{self.shooter_id}")
+                        print(f"   Frame: {self.frame_count}, Oyuncu: P{self.shooter_id} ({'✓ Doğrulandı' if len(shooter_frames) > 0 else '⚠ Fallback'})")
                         print(f"   Pozisyon: {self.release_player_pos}, Y-oranı: {y_ratio:.2f}")
                         print(f"   Mesafe artışı: {dist_increase:.1f}px, Hız: {ball_velocity:.1f}px/f")
                         print(f"   Potaya mesafe: {player_to_hoop_dist:.0f}px")
                         print(f"   Threshold: HOLDING={HOLDING_THRESHOLD}px, RELEASE={RELEASE_THRESHOLD}px (faktör={perspective_factor:.1f})")
+                        print(f"   Shooter frame sayısı: {len(shooter_frames)} (aynı oyuncuya ait)")
                         
                         # Frame'de işaretle
                         if self.release_player_pos:
                             cv2.circle(self.frame, self.release_player_pos, 15, (255, 0, 255), 3)
-                            cv2.putText(self.frame, f"RELEASE ({shot_type}-{depth_zone})", 
-                                      (self.release_player_pos[0] - 70, self.release_player_pos[1] - 25),
-                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
-                            # Threshold bilgisi (debug)
-                            cv2.putText(self.frame, f"H:{HOLDING_THRESHOLD} R:{RELEASE_THRESHOLD}", 
-                                      (self.release_player_pos[0] - 50, self.release_player_pos[1] - 10),
+                            # Oyuncu ID'sini büyük göster
+                            cv2.putText(self.frame, f"P{self.shooter_id} RELEASE ({shot_type})", 
+                                      (self.release_player_pos[0] - 80, self.release_player_pos[1] - 35),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 255), 2)
+                            # Zone ve threshold bilgisi
+                            cv2.putText(self.frame, f"{depth_zone} | H:{HOLDING_THRESHOLD} R:{RELEASE_THRESHOLD}", 
+                                      (self.release_player_pos[0] - 80, self.release_player_pos[1] - 15),
                                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+                            # Doğrulama işareti
+                            if len(shooter_frames) > 0:
+                                cv2.putText(self.frame, "VERIFIED", 
+                                          (self.release_player_pos[0] - 30, self.release_player_pos[1] + 5),
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
         
         # --- SHOT SCORING (orijinal mantık) ---
         if len(self.hoop_pos) > 0 and len(self.ball_pos) > 0:
