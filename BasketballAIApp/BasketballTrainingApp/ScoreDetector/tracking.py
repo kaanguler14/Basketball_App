@@ -8,10 +8,14 @@ import numpy as np
 import json
 import os
 from utilsfixed import score, detect_down, detect_up, in_hoop_region, clean_hoop_pos, clean_ball_pos, get_device
-
+import time
 # ------------------ DeepSORT ------------------
 from deep_sort_realtime.deepsort_tracker import DeepSort
-
+import tkinter as tk
+from tkinter import messagebox
+import tkinter as tk
+from tkinter import ttk
+import mediapipe as mp
 
 # ------------------------ CONFIG ------------------------
 court_labels = [
@@ -41,10 +45,15 @@ class ShotDetector:
         )
 
         # --- VIDEO / MINIMAP ---
-        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training2.mp4")
+        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training7.mp4")
         self.minimap_img = cv2.imread(r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\Homography\images\hom.png")
         self.frame_count = 0
         self.frame = None
+
+        #MediaPipe
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_holistic=mp.solutions.holistic
+        self.holistic=self.mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
         # --- BALL/HOOP LOGIC ---
         self.ball_pos = []
@@ -55,6 +64,19 @@ class ShotDetector:
         self.down = False
         self.up_frame = 0
         self.down_frame = 0
+
+        #Shot location
+        self.shot_history = []
+        self.onBall=False
+        self.playerShotPosition=np.array([int,int])
+        self.playerBall=np.array([int,int])
+
+
+
+
+        # --- FPS ---
+        self.prev_time = 0.0
+        self.fps = 0
 
         # --- OVERLAY ---
         self.fade_frames = 20
@@ -102,8 +124,7 @@ class ShotDetector:
         return video_points_dict, minimap_points_dict
 
     def ask_reload(self):
-        import tkinter as tk
-        from tkinter import messagebox
+
         root = tk.Tk()
         root.withdraw()
         result = messagebox.askyesno("JSON bulundu", "Önceden kaydedilmiş noktalar bulundu.\nYeniden seçmek ister misin?")
@@ -111,8 +132,7 @@ class ShotDetector:
         return result
 
     def select_points(self, image, title):
-        import tkinter as tk
-        from tkinter import ttk
+
         points_dict = {}
         def on_mouse(event, x, y, flags, param):
             if event == cv2.EVENT_LBUTTONDOWN:
@@ -171,13 +191,61 @@ class ShotDetector:
         errs = np.linalg.norm(proj - minimap_pts, axis=1)
         return H, float(np.mean(errs)), proj, errs
 
+    #Pose Estimation
+    def pose(self,frame):
+        self.frame = cv2.cvtColor(self.frame, cv2.COLOR_BGR2RGB)
+        poseResults = self.holistic.process(self.frame)
+        self.frame = cv2.cvtColor(self.frame, cv2.COLOR_RGB2BGR)
+
+        self.mp_drawing.draw_landmarks(self.frame, poseResults.face_landmarks,
+                                       self.mp_holistic.FACEMESH_CONTOURS,
+                                       self.mp_drawing.DrawingSpec(color=(80, 110, 10), thickness=1,
+                                                                   circle_radius=1),
+                                       self.mp_drawing.DrawingSpec(color=(80, 256, 121), thickness=1,
+                                                                   circle_radius=1))
+
+        self.mp_drawing.draw_landmarks(self.frame, poseResults.right_hand_landmarks,
+                                       self.mp_holistic.HAND_CONNECTIONS,
+                                       self.mp_drawing.DrawingSpec(color=(80, 22, 10), thickness=2,
+                                                                   circle_radius=4),
+                                       self.mp_drawing.DrawingSpec(color=(80, 44, 121), thickness=2,
+                                                                   circle_radius=2))
+
+        self.mp_drawing.draw_landmarks(self.frame, poseResults.left_hand_landmarks,
+                                       self.mp_holistic.HAND_CONNECTIONS,
+                                       self.mp_drawing.DrawingSpec(color=(121, 22, 76), thickness=2,
+                                                                   circle_radius=4),
+                                       self.mp_drawing.DrawingSpec(color=(121, 44, 250), thickness=2,
+                                                                   circle_radius=2))
+
+        self.mp_drawing.draw_landmarks(self.frame, poseResults.pose_landmarks,
+                                       self.mp_holistic.POSE_CONNECTIONS,
+                                       self.mp_drawing.DrawingSpec(color=(245, 117, 66), thickness=2,
+                                                                   circle_radius=4),
+                                       self.mp_drawing.DrawingSpec(color=(245, 66, 230), thickness=2,
+                                                                   circle_radius=2))
+
     # ------------------------ RUN ------------------------
     def run(self):
         while True:
             ret, self.frame = self.cap.read()
             if not ret:
                 break
-            self.frame = cv2.resize(self.frame, (int(self.frame.shape[1]*scale), int(self.frame.shape[0]*scale)))
+
+            # --- FPS ---
+            now = time.time()
+            self.fps = 1.0 / (now - self.prev_time) if self.prev_time else 0.0
+            self.prev_time = now
+
+            # Pose Estimation
+
+            #self.pose(self.frame)
+
+            self.frame = cv2.resize(self.frame, (int(self.frame.shape[1] * scale), int(self.frame.shape[0] * scale)))
+
+
+
+
 
             # --- BALL + HOOP ---
             results_ball = self.model_ball(self.frame, stream=True, device=self.device)
@@ -199,6 +267,8 @@ class ShotDetector:
 
             # --- PLAYER DETECTION + DEEPSORT TRACKING ---
             results_player = self.model_player(self.frame, device=self.device, conf=0.6)[0]
+            CONF_THRESHOLD = 0.65
+
             detections = []
             if results_player.boxes is not None:
                 for box in results_player.boxes:
@@ -208,8 +278,9 @@ class ShotDetector:
                         continue
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
                     conf = float(box.conf[0])
-                    detections.append(((x1, y1, x2 - x1, y2 - y1), conf, cls_index))
-
+                    # --- sadece yeterli confidence varsa ekle ---
+                    if conf >= CONF_THRESHOLD:
+                        detections.append(((x1, y1, x2 - x1, y2 - y1), conf, cls_index))
             tracks = self.deepsort.update_tracks(detections, frame=self.frame)
 
             players = []
@@ -227,7 +298,7 @@ class ShotDetector:
 
             # --- BALL & HOOP CLEANING + SHOT DETECTION ---
             self.clean_motion()
-            self.shot_detection()
+            self.shot_detection(players)
 
             # --- MINIMAP ---
             self.draw_minimap(players)
@@ -240,6 +311,9 @@ class ShotDetector:
             score_text = f"Score: {self.makes}/{self.attempts}"
             cv2.putText(self.frame, score_text, (50,50),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,0,255), 3)
+
+
+            cv2.putText(self.frame, f"FPS: {int(self.fps)}", (20, self.frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
 
             self.frame_count += 1
             cv2.imshow("Frame", self.frame)
@@ -257,47 +331,64 @@ class ShotDetector:
                 self.hoop_pos = clean_hoop_pos(self.hoop_pos)
                 cv2.circle(self.frame, self.hoop_pos[-1][0], 2, (0, 128, 0), 2)
 
-    def shot_detection(self):
+    def shot_detection(self, players=[]):
         if len(self.hoop_pos) > 0 and len(self.ball_pos) > 0:
             if not self.up:
                 self.up = detect_up(self.ball_pos, self.hoop_pos)
                 if self.up:
                     self.up_frame = self.ball_pos[-1][1]
-                    self.release_pos = self.ball_pos[-1][0]
+
             if self.up and not self.down:
                 self.down = detect_down(self.ball_pos, self.hoop_pos)
                 if self.down:
                     self.down_frame = self.ball_pos[-1][1]
-            if self.frame_count % 20 == 0:
-                if self.up and self.down and self.up_frame < self.down_frame:
-                    self.attempts += 1
-                    self.up = False
-                    self.down = False
-                    made = score(self.ball_pos, self.hoop_pos)
-                    if made:
-                        self.makes += 1
-                        self.overlay_text = "Score"
-                        self.overlay_color = (0, 255, 0)
-                    else:
-                        self.overlay_text = "Miss"
-                        self.overlay_color = (0, 0, 255)
-                    self.fade_counter = self.fade_frames
-                    if hasattr(self, "release_pos"):
-                        fh, fw = self.frame.shape[:2]
-                        mh, mw = self.minimap_img.shape[:2]
-                        mx = int(self.release_pos[0] / fw * mw)
-                        my = int(self.release_pos[1] / fh * mh)
-                        self.shot_history.append((mx, my, made))
+
+            if self.up and self.down and self.up_frame < self.down_frame:
+                self.attempts += 1
+                made = score(self.ball_pos, self.hoop_pos)
+                if made:
+                    self.makes += 1
+                    self.overlay_text = "Score"
+                    self.overlay_color = (0, 255, 0)
+                else:
+                    self.overlay_text = "Miss"
+                    self.overlay_color = (0, 0, 255)
+                self.fade_counter = self.fade_frames
+
+                # --- Minimapte atış noktası = atış anındaki oyuncu ---
+                if players:
+                    # Topa en yakın oyuncuyu seç
+                    bx, by = self.ball_pos[-1][0]
+                    nearest = min(players, key=lambda p: (p[0] - bx) ** 2 + (p[1] - by) ** 2)
+                    pt = np.array([[[nearest[0], nearest[1]]]], dtype=np.float32)
+                    proj_pt = cv2.perspectiveTransform(pt, self.H)[0][0]
+                    mx = int(proj_pt[0])
+                    my = int(proj_pt[1])
+                    if self.use_flip:
+                        my = self.h_img - my
+                    self.shot_history.append((mx, my, made))
+
+                self.up = False
+                self.down = False
+
         if self.fade_counter > 0:
             self.fade_counter -= 1
 
-    # ------------------------ MINIMAP ------------------------
+    def get_nearest_player(self, ball_pos, players):
+        # ball_pos = (x,y)
+        if not players:
+            return (ball_pos[0], ball_pos[1])
+        bx, by = ball_pos
+        nearest = min(players, key=lambda p: (p[0] - bx) ** 2 + (p[1] - by) ** 2)
+        return (nearest[0], nearest[1])
+
     def draw_minimap(self, players=[]):
         minimap_copy = self.minimap_img.copy()
-        for (x, y, made) in self.shot_history:
+
+        for mx, my, made in self.shot_history:
             color = (0, 255, 0) if made else (0, 0, 255)
-            cv2.line(minimap_copy, (x - 10, y - 10), (x + 10, y + 10), color, 2)
-            cv2.line(minimap_copy, (x - 10, y + 10), (x + 10, y - 10), color, 2)
+            cv2.line(minimap_copy, (mx - 10, my - 10), (mx + 10, my + 10), color, 2)
+            cv2.line(minimap_copy, (mx - 10, my + 10), (mx + 10, my - 10), color, 2)
 
         # Oyuncular (cx,cy,ID)
         for cx, cy, pid in players:
@@ -311,8 +402,8 @@ class ShotDetector:
             color = (0, 0, 255) if inside else (0, 0, 128)
             cv2.circle(minimap_copy, (np.clip(display_x, 0, minimap_copy.shape[1] - 1),
                                       np.clip(display_y, 0, minimap_copy.shape[0] - 1)), 8, color, -1)
-            cv2.putText(minimap_copy, f"P{pid}", (display_x+8, display_y-8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
+            cv2.putText(minimap_copy, f"P{pid}", (display_x + 8, display_y - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             if not inside:
                 cv2.putText(minimap_copy, "OUT", (np.clip(display_x, 0, minimap_copy.shape[1] - 1) + 6,
                                                   np.clip(display_y, 0, minimap_copy.shape[0] - 1) - 6),
