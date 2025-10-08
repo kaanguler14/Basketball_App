@@ -69,11 +69,14 @@ class ShotDetector:
         self.hoop_detected = False  # Pota tespit edildi mi?
         self.stable_hoop_pos = None  # Sabit pota pozisyonu (center, w, h)
 
-        #Shot location
+        #Shot location & Release Point Detection
         self.shot_history = []
-        self.onBall=False
-        self.playerShotPosition=np.array([int,int])
-        self.playerBall=np.array([int,int])
+        self.ball_with_player = False  # Top oyuncuda mı?
+        self.release_detected = False  # Şut atıldı mı?
+        self.release_frame = None  # Şutun atıldığı frame
+        self.release_player_pos = None  # Şut anındaki oyuncu pozisyonu
+        self.shooter_id = None  # Şut atan oyuncu ID'si
+        self.ball_player_history = []  # Top-oyuncu mesafe geçmişi
 
 
 
@@ -376,6 +379,153 @@ class ShotDetector:
                 cv2.circle(self.frame, self.hoop_pos[-1][0], 2, (0, 128, 0), 2)
 
     def shot_detection(self, players=[]):
+        """
+        Gelişmiş şut tespiti - şutun elden çıktığı anı tespit eder
+        """
+        if len(self.ball_pos) == 0:
+            return
+            
+        # --- RELEASE POINT DETECTION (Gelişmiş - Uzaktan şutlar için optimize) ---
+        if players and len(self.ball_pos) > 0:
+            bx, by = self.ball_pos[-1][0]
+            
+            # En yakın oyuncuyu bul
+            nearest = min(players, key=lambda p: math.sqrt((p[0] - bx) ** 2 + (p[1] - by) ** 2))
+            nearest_dist = math.sqrt((nearest[0] - bx) ** 2 + (nearest[1] - by) ** 2)
+            px, py = nearest[0], nearest[1]
+            
+            # Top-oyuncu mesafe geçmişini kaydet
+            self.ball_player_history.append({
+                'frame': self.frame_count,
+                'distance': nearest_dist,
+                'player_pos': (px, py),
+                'player_id': nearest[2] if len(nearest) > 2 else None,
+                'ball_pos': (bx, by)
+            })
+            
+            # Son 15 frame'i tut (uzaktan şutlar için daha uzun geçmiş)
+            if len(self.ball_player_history) > 15:
+                self.ball_player_history.pop(0)
+            
+            # Potaya olan mesafeyi hesapla (dinamik threshold için)
+            if len(self.hoop_pos) > 0:
+                hx, hy = self.hoop_pos[-1][0]
+                player_to_hoop_dist = math.sqrt((px - hx) ** 2 + (py - hy) ** 2)
+            else:
+                player_to_hoop_dist = 200  # default
+            
+            # PERSPEKTİF KOMPANSASYONU - Y koordinatına göre (derinlik)
+            # Y büyük = kameraya YAKIN (alt kısım, önde) → daha büyük threshold gerekli
+            # Y küçük = kameraya UZAK (üst kısım, arkada) → daha küçük threshold
+            frame_height = self.frame.shape[0]
+            
+            # Y pozisyonuna göre perspektif faktörü (0.8 - 1.5 arası)
+            # Alt kısım (py/height > 0.7): faktör ~1.5 (threshold %50 artar)
+            # Orta kısım (py/height ~ 0.5): faktör ~1.0 (normal)
+            # Üst kısım (py/height < 0.3): faktör ~0.8 (threshold %20 azalır)
+            y_ratio = py / frame_height
+            if y_ratio > 0.7:  # Çok önde (kameraya çok yakın)
+                perspective_factor = 1.5
+                depth_zone = "ÖN"
+            elif y_ratio > 0.5:  # Orta-ön
+                perspective_factor = 1.2
+                depth_zone = "ORTA-ÖN"
+            elif y_ratio > 0.3:  # Orta-arka
+                perspective_factor = 1.0
+                depth_zone = "ORTA"
+            else:  # Çok arkada
+                perspective_factor = 0.8
+                depth_zone = "ARKA"
+            
+            # DİNAMİK THRESHOLD - Potaya uzaklığa göre ayarlanır
+            # Uzak şut: daha büyük threshold
+            # Yakın şut: daha küçük threshold
+            BASE_THRESHOLD = 50
+            if player_to_hoop_dist > 300:  # Çok uzak şut (3-point)
+                HOLDING_THRESHOLD = 80
+                RELEASE_THRESHOLD = 15  # Daha düşük, çünkü hızlı hareket var
+            elif player_to_hoop_dist > 200:  # Orta mesafe
+                HOLDING_THRESHOLD = 65
+                RELEASE_THRESHOLD = 18
+            else:  # Yakın şut
+                HOLDING_THRESHOLD = 50
+                RELEASE_THRESHOLD = 20
+            
+            # Perspektif faktörünü uygula
+            HOLDING_THRESHOLD = int(HOLDING_THRESHOLD * perspective_factor)
+            RELEASE_THRESHOLD = int(RELEASE_THRESHOLD / perspective_factor)  # Ters oran (daha hassas tespit)
+            
+            # Top oyuncuya yakınsa = oyuncuda
+            if nearest_dist < HOLDING_THRESHOLD:
+                self.ball_with_player = True
+                self.shooter_id = nearest[2] if len(nearest) > 2 else None
+                self.release_detected = False
+            
+            # Top oyuncudan uzaklaşıyorsa = ŞUT ATILDI!
+            elif self.ball_with_player and not self.release_detected:
+                # En az 2 frame gerekli
+                if len(self.ball_player_history) >= 2:
+                    # Son frame'leri al
+                    recent = self.ball_player_history[-2:]
+                    
+                    # Mesafe artışı
+                    dist_increase = recent[-1]['distance'] - recent[0]['distance']
+                    
+                    # Y hareketi (yukarı = negatif, çünkü koordinat sistemi)
+                    y_movement = recent[-1]['ball_pos'][1] - recent[0]['ball_pos'][1]
+                    
+                    # Hız hesapla (piksel/frame)
+                    ball_velocity = math.sqrt(
+                        (recent[-1]['ball_pos'][0] - recent[0]['ball_pos'][0]) ** 2 +
+                        (recent[-1]['ball_pos'][1] - recent[0]['ball_pos'][1]) ** 2
+                    )
+                    
+                    # RELEASE KRİTERLERİ:
+                    # 1. Mesafe artıyor VEYA
+                    # 2. Top yukarı hareket ediyor (y_movement < 0) VE hızlı hareket var VEYA
+                    # 3. Velocity yüksek (hızlı atış)
+                    
+                    release_condition = (
+                        dist_increase > RELEASE_THRESHOLD or  # Mesafe artışı
+                        (y_movement < -10 and ball_velocity > 15) or  # Yukarı + hızlı
+                        ball_velocity > 25  # Çok hızlı hareket (ani atış)
+                    )
+                    
+                    if release_condition:
+                        self.release_detected = True
+                        self.release_frame = self.frame_count
+                        
+                        # Şut anındaki oyuncu pozisyonunu kaydet
+                        # En iyi pozisyon: topun hala yakın olduğu son frame
+                        best_idx = -1
+                        for i in range(len(self.ball_player_history) - 1, max(0, len(self.ball_player_history) - 4), -1):
+                            if self.ball_player_history[i]['distance'] < HOLDING_THRESHOLD * 1.2:
+                                best_idx = i
+                                break
+                        
+                        self.release_player_pos = self.ball_player_history[best_idx]['player_pos']
+                        
+                        # Detaylı log
+                        shot_type = "UZAK" if player_to_hoop_dist > 300 else ("ORTA" if player_to_hoop_dist > 200 else "YAKIN")
+                        print(f"🏀 {shot_type} ŞUT ATILDI! [Derinlik: {depth_zone}]")
+                        print(f"   Frame: {self.frame_count}, Oyuncu: P{self.shooter_id}")
+                        print(f"   Pozisyon: {self.release_player_pos}, Y-oranı: {y_ratio:.2f}")
+                        print(f"   Mesafe artışı: {dist_increase:.1f}px, Hız: {ball_velocity:.1f}px/f")
+                        print(f"   Potaya mesafe: {player_to_hoop_dist:.0f}px")
+                        print(f"   Threshold: HOLDING={HOLDING_THRESHOLD}px, RELEASE={RELEASE_THRESHOLD}px (faktör={perspective_factor:.1f})")
+                        
+                        # Frame'de işaretle
+                        if self.release_player_pos:
+                            cv2.circle(self.frame, self.release_player_pos, 15, (255, 0, 255), 3)
+                            cv2.putText(self.frame, f"RELEASE ({shot_type}-{depth_zone})", 
+                                      (self.release_player_pos[0] - 70, self.release_player_pos[1] - 25),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 2)
+                            # Threshold bilgisi (debug)
+                            cv2.putText(self.frame, f"H:{HOLDING_THRESHOLD} R:{RELEASE_THRESHOLD}", 
+                                      (self.release_player_pos[0] - 50, self.release_player_pos[1] - 10),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+        
+        # --- SHOT SCORING (orijinal mantık) ---
         if len(self.hoop_pos) > 0 and len(self.ball_pos) > 0:
             if not self.up:
                 self.up = detect_up(self.ball_pos, self.hoop_pos)
@@ -399,21 +549,39 @@ class ShotDetector:
                     self.overlay_color = (0, 0, 255)
                 self.fade_counter = self.fade_frames
 
-                # --- Minimapte atış noktası = atış anındaki oyuncu ---
-                if players:
-                    # Topa en yakın oyuncuyu seç
-                    bx, by = self.ball_pos[-1][0]
-                    nearest = min(players, key=lambda p: (p[0] - bx) ** 2 + (p[1] - by) ** 2)
-                    pt = np.array([[[nearest[0], nearest[1]]]], dtype=np.float32)
+                # --- Minimapte RELEASE POINT'i işaretle ---
+                if self.release_player_pos:
+                    # Release pozisyonunu kullan (şutun atıldığı yer)
+                    pt = np.array([[[self.release_player_pos[0], self.release_player_pos[1]]]], dtype=np.float32)
                     proj_pt = cv2.perspectiveTransform(pt, self.H)[0][0]
                     mx = int(proj_pt[0])
                     my = int(proj_pt[1])
                     if self.use_flip:
                         my = self.h_img - my
-                    self.shot_history.append((mx, my, made))
+                    self.shot_history.append((mx, my, made, self.shooter_id))
+                    print(f"📍 Minimap'e eklendi: ({mx}, {my}), Oyuncu: P{self.shooter_id}, {'BAŞARILI' if made else 'BAŞARISIZ'}")
+                else:
+                    # Fallback: şu anki oyuncu pozisyonu
+                    if players:
+                        bx, by = self.ball_pos[-1][0]
+                        nearest = min(players, key=lambda p: (p[0] - bx) ** 2 + (p[1] - by) ** 2)
+                        pt = np.array([[[nearest[0], nearest[1]]]], dtype=np.float32)
+                        proj_pt = cv2.perspectiveTransform(pt, self.H)[0][0]
+                        mx = int(proj_pt[0])
+                        my = int(proj_pt[1])
+                        if self.use_flip:
+                            my = self.h_img - my
+                        pid = nearest[2] if len(nearest) > 2 else None
+                        self.shot_history.append((mx, my, made, pid))
 
+                # Reset
                 self.up = False
                 self.down = False
+                self.ball_with_player = False
+                self.release_detected = False
+                self.release_player_pos = None
+                self.shooter_id = None
+                self.ball_player_history = []
 
         if self.fade_counter > 0:
             self.fade_counter -= 1
@@ -429,10 +597,28 @@ class ShotDetector:
     def draw_minimap(self, players=[]):
         minimap_copy = self.minimap_img.copy()
 
-        for mx, my, made in self.shot_history:
+        # Şut pozisyonlarını işaretle (RELEASE POINT'ler)
+        for shot_data in self.shot_history:
+            if len(shot_data) == 4:
+                mx, my, made, shooter_id = shot_data
+            else:
+                mx, my, made = shot_data
+                shooter_id = None
+            
+            # Renk: Yeşil = başarılı, Kırmızı = kaçan
             color = (0, 255, 0) if made else (0, 0, 255)
-            cv2.line(minimap_copy, (mx - 10, my - 10), (mx + 10, my + 10), color, 2)
-            cv2.line(minimap_copy, (mx - 10, my + 10), (mx + 10, my - 10), color, 2)
+            
+            # X işareti (şut pozisyonu)
+            cv2.line(minimap_copy, (mx - 10, my - 10), (mx + 10, my + 10), color, 3)
+            cv2.line(minimap_copy, (mx - 10, my + 10), (mx + 10, my - 10), color, 3)
+            
+            # Daire (release point vurgusu)
+            cv2.circle(minimap_copy, (mx, my), 8, color, 2)
+            
+            # Oyuncu ID'si (varsa)
+            if shooter_id is not None:
+                cv2.putText(minimap_copy, f"P{shooter_id}", (mx + 12, my - 5),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
         # Oyuncular (cx,cy,ID)
         for cx, cy, pid in players:
