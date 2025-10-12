@@ -1,8 +1,17 @@
 """
 Shot Detection Module
 =====================
-Shot tespiti ve release point detection için modüler class.
-tracking.py'den ayrıştırıldı - daha temiz ve maintainable kod.
+Modular class for basketball shot detection and release point tracking.
+
+This module was refactored from tracking.py to provide cleaner, more maintainable code
+for shot detection logic. It handles:
+- Dynamic threshold calculation based on camera perspective and shot distance
+- Release point detection (when player releases the ball)
+- Shot scoring (made/missed detection)
+- Player ID tracking (which player took the shot)
+
+Author: Basketball AI Team
+Date: 2024
 """
 
 import cv2
@@ -15,11 +24,33 @@ class ShotDetectorModule:
     """
     Şut tespiti ve release point detection için özelleşmiş class.
     
-    Özellikler:
-    - Dinamik threshold ayarlama (perspektif ve mesafeye göre)
-    - Release point detection (oyuncunun topu bıraktığı an)
-    - Shot scoring (başarılı/başarısız şut tespiti)
-    - Player ID tracking (hangi oyuncu şutu attı)
+    This class encapsulates all shot detection logic including:
+    - Dynamic threshold adjustment based on perspective and distance
+    - Release point detection (moment when player releases the ball)
+    - Shot scoring (made/missed shot detection)
+    - Player ID tracking (which player took the shot)
+    - Shot history management for minimap visualization
+    
+    The detector uses a multi-stage approach:
+    1. Track ball-player distance over time
+    2. Detect when ball is in player's hands (with dynamic thresholds)
+    3. Detect release moment (when ball leaves hands)
+    4. Track ball trajectory to hoop
+    5. Score the shot (made/missed)
+    
+    Key Features:
+    - Perspective compensation: Handles camera angle distortion
+    - Distance-adaptive thresholds: Different thresholds for 3-point vs paint shots
+    - Temporal smoothing: Uses frame history to reduce false positives
+    - Robust release detection: Multiple criteria for reliable detection
+    
+    Attributes:
+        ball_with_player (bool): Whether ball is currently in player's hands
+        release_detected (bool): Whether a release has been detected
+        shooter_id (int): ID of the player who took the shot
+        makes (int): Number of successful shots
+        attempts (int): Total number of shot attempts
+        shot_history (list): History of shots for minimap visualization
     """
     
     def __init__(self):
@@ -121,21 +152,30 @@ class ShotDetectorModule:
         
         # Dinamik threshold hesapla
         HOLDING_THRESHOLD, RELEASE_THRESHOLD = self._calculate_dynamic_thresholds(
-            player_to_hoop_dist, perspective_factor
+            player_to_hoop_dist, perspective_factor, y_ratio
         )
+        
+        # DEBUG LOG - Her frame'de göster
+        print(f"[DEBUG] Mesafe: {nearest_dist:.1f}px, Threshold: {HOLDING_THRESHOLD}px, "
+              f"Y-ratio: {y_ratio:.2f}, Factor: {perspective_factor:.2f}, "
+              f"Hoop dist: {player_to_hoop_dist:.0f}px")
         
         # Top oyuncuya yakınsa
         if nearest_dist < HOLDING_THRESHOLD:
             if not self.ball_with_player:
                 self.shooter_id = nearest[2] if len(nearest) > 2 else None
-                print(f"   → Top yakalandı: Oyuncu P{self.shooter_id}")
+                print(f"   ✅ Top yakalandı: Oyuncu P{self.shooter_id} (mesafe: {nearest_dist:.1f}px < {HOLDING_THRESHOLD}px)")
             
             self.ball_with_player = True
             self.release_detected = False
             return None
+        else:
+            # DEBUG: Neden yakalanmadı?
+            if not self.ball_with_player:
+                print(f"   ❌ Top yakalanmadı: {nearest_dist:.1f}px >= {HOLDING_THRESHOLD}px (fark: {nearest_dist - HOLDING_THRESHOLD:.1f}px)")
         
         # Top oyuncudan uzaklaşıyorsa - RELEASE!
-        elif self.ball_with_player and not self.release_detected:
+        if self.ball_with_player and not self.release_detected:
             release_info = self._check_release_condition(
                 frame, frame_count, player_to_hoop_dist, 
                 HOLDING_THRESHOLD, RELEASE_THRESHOLD,
@@ -147,7 +187,7 @@ class ShotDetectorModule:
     
     def _calculate_perspective_factor(self, y_ratio):
         """
-        Perspektif faktörünü hesapla (derinlik kompansasyonu).
+        Perspektif faktörünü hesapla - KAMERAYA YAKINLIK İÇİN İYİLEŞTİRİLMİŞ.
         
         Args:
             y_ratio: Y koordinatının frame yüksekliğine oranı
@@ -155,38 +195,96 @@ class ShotDetectorModule:
         Returns:
             tuple: (perspective_factor, depth_zone)
         """
-        if y_ratio > 0.7:  # Çok önde
-            return 1.5, "ÖN"
+        # DAHA YUMUŞAK perspektif faktörleri - aşırı büyütmeyi önle
+        if y_ratio > 0.7:  # Kameraya çok yakın
+            return 1.25, "ÖN"  # 1.5 -> 1.25 (daha yumuşak)
         elif y_ratio > 0.5:  # Orta-ön
-            return 1.2, "ORTA-ÖN"
+            return 1.1, "ORTA-ÖN"  # 1.2 -> 1.1
         elif y_ratio > 0.3:  # Orta-arka
             return 1.0, "ORTA"
         else:  # Çok arkada
-            return 0.8, "ARKA"
+            return 0.85, "ARKA"  # 0.8 -> 0.85
     
-    def _calculate_dynamic_thresholds(self, player_to_hoop_dist, perspective_factor):
+    def _calculate_dynamic_thresholds(self, player_to_hoop_dist, perspective_factor, y_ratio):
         """
-        Dinamik threshold'ları hesapla.
+        Calculate dynamic thresholds for ball possession detection based on shot type and camera perspective.
+        
+        This method implements a multi-stage threshold calculation to handle perspective distortion:
+        1. Base threshold selection based on player-to-hoop distance (shot type)
+        2. Perspective compensation using squared factor (inverse square law)
+        3. Extra boost for extreme camera proximity (y_ratio > 0.95)
+        
+        Why squared perspective factor?
+        - Perspective distortion follows inverse square law: distortion ∝ 1/depth²
+        - Objects closer to camera appear disproportionately larger
+        - Distances between objects scale non-linearly with depth
+        
+        Why extra boost for high y_ratio?
+        - When y_ratio > 0.95, player is very close to camera (bottom of frame)
+        - Ball-hand distance can appear 150px+ even when physically in hand (~20cm)
+        - Standard perspective factor (1.25²) only gives ~109px, insufficient for 150px
+        - 2x boost brings threshold to 218px, covering extreme cases
         
         Args:
-            player_to_hoop_dist: Oyuncunun potaya mesafesi
-            perspective_factor: Perspektif faktörü
+            player_to_hoop_dist (float): Distance from player to hoop in pixels
+                - > 300px: 3-point shot (far)
+                - 200-300px: Mid-range shot
+                - 100-200px: Close-mid shot
+                - < 100px: Paint area shot (very close)
             
+            perspective_factor (float): Perspective compensation multiplier (0.85-1.25)
+                - < 1.0: Player far from camera (top of frame)
+                - > 1.0: Player close to camera (bottom of frame)
+                - Calculated from y_ratio in _calculate_perspective_factor()
+            
+            y_ratio (float): Vertical position in frame (0.0 = top, 1.0 = bottom)
+                - Used for extreme proximity detection
+                - > 0.95: Very close to camera, needs 2x boost
+                - > 0.85: Moderately close, needs 1.5x boost
+        
         Returns:
             tuple: (HOLDING_THRESHOLD, RELEASE_THRESHOLD)
-        """
-        if player_to_hoop_dist > 300:  # Uzak şut (3-point)
-            holding = 80
-            release = 15
-        elif player_to_hoop_dist > 200:  # Orta mesafe
-            holding = 65
-            release = 18
-        else:  # Yakın şut
-            holding = 50
-            release = 20
+                - HOLDING_THRESHOLD (int): Max distance (px) to consider ball in player's hand
+                - RELEASE_THRESHOLD (int): Min distance increase (px) to detect ball release
         
-        # Perspektif faktörünü uygula
-        holding = int(holding * perspective_factor)
+        Example:
+            >>> # Player close to camera, 3-point shot
+            >>> holding, release = _calculate_dynamic_thresholds(398, 1.25, 0.99)
+            >>> # holding = 70 * 1.25² * 2.0 = 218px (can detect 150px actual distance)
+            >>> # release = 15 / 1.25 = 12px (easier release detection when close)
+        """
+        # STEP 1: Select base threshold based on shot type (player-to-hoop distance)
+        # Rationale: Players farther from hoop appear smaller, so ball-hand distance appears larger
+        if player_to_hoop_dist > 300:  # 3-point shot (far from hoop)
+            holding = 70  # Higher threshold: player appears small, ball-hand distance ~50-70px
+            release = 15  # Lower threshold: small movements are significant        elif player_to_hoop_dist > 200:  # Mid-range shot
+            holding = 55  # Medium threshold: medium-sized player
+            release = 20  # Medium sensitivity
+        elif player_to_hoop_dist > 100:  # Close-mid shot
+            holding = 45  # Lower threshold: player appears larger
+            release = 25  # Higher threshold: need more movement to confirm release
+        else:  # Paint area shot (< 100px, very close to hoop)
+            holding = 35  # Lowest threshold: player appears very large, ball-hand distance ~20-35px
+            release = 30  # Highest threshold: close shots are slower, need significant movement
+        
+        # STEP 2: Apply perspective compensation (SQUARED factor for inverse square law)
+        # Why squared? Perspective distortion ∝ 1/depth²
+        # - Ball closer to camera → appears disproportionately farther from hand
+        # - Example: 1.25² = 1.5625x amplification (70px → 109px)
+        holding = int(holding * perspective_factor * perspective_factor)
+        
+        # STEP 3: Extra boost for extreme camera proximity
+        # Problem: Even with squared factor, very close players (y_ratio > 0.95) have
+        # ball-hand distances of 150px+, but squared factor only gives ~109px
+        # Solution: Additional multiplier for extreme cases
+        if y_ratio > 0.95:  # Very close to camera (bottom 5% of frame)
+            holding = int(holding * 2.0)  # 2x boost → 109px * 2.0 = 218px (covers 150px actual distance)
+        elif y_ratio > 0.85:  # Moderately close to camera (bottom 15% of frame)
+            holding = int(holding * 1.5)  # 1.5x boost → handles 120-140px distances
+        
+        # STEP 4: Adjust release threshold (inverse relationship)
+        # Why divide? Ball closer to camera moves faster in pixel space
+        # → Smaller pixel movement = actual release → lower threshold needed
         release = int(release / perspective_factor)
         
         return holding, release
@@ -218,12 +316,35 @@ class ShotDetectorModule:
             (recent[-1]['ball_pos'][1] - recent[0]['ball_pos'][1]) ** 2
         )
         
-        # Release kriterleri
-        release_condition = (
-            dist_increase > RELEASE_THRESHOLD or
-            (y_movement < -10 and ball_velocity > 15) or
-            ball_velocity > 25
-        )
+        # Release kriterleri - MESAFE VE KAMERAYA YAKINLIK İÇİN ADAPTIF
+        # Kameraya çok yakın pozisyonlarda (y_ratio > 0.7) daha esnek ol
+        is_close_to_camera = y_ratio > 0.7
+        
+        if is_close_to_camera:
+            # KAMERAYA YAKIN - Perspektif etkisi nedeniyle çok esnek kriterler
+            release_condition = (
+                dist_increase > RELEASE_THRESHOLD * 0.8 or  # %20 daha esnek
+                (y_movement < -3 and ball_velocity > 6) or   # Çok düşük gereksinimler
+                ball_velocity > 10  # Minimum hız çok düşük
+            )
+        elif player_to_hoop_dist < 100:  # ÇOK YAKIN ŞUT (ama kameraya uzak)
+            release_condition = (
+                dist_increase > RELEASE_THRESHOLD or
+                (y_movement < -5 and ball_velocity > 8) or
+                ball_velocity > 12
+            )
+        elif player_to_hoop_dist < 200:  # YAKIN-ORTA
+            release_condition = (
+                dist_increase > RELEASE_THRESHOLD or
+                (y_movement < -8 and ball_velocity > 12) or
+                ball_velocity > 18
+            )
+        else:  # UZAK ŞUT
+            release_condition = (
+                dist_increase > RELEASE_THRESHOLD or
+                (y_movement < -10 and ball_velocity > 15) or
+                ball_velocity > 25
+            )
         
         if not release_condition:
             return None
@@ -236,10 +357,15 @@ class ShotDetectorModule:
         release_pos, shooter_frames = self._find_shooter_position(HOLDING_THRESHOLD)
         self.release_player_pos = release_pos
         
-        # Shot type belirle
-        shot_type = "UZAK" if player_to_hoop_dist > 300 else (
-            "ORTA" if player_to_hoop_dist > 200 else "YAKIN"
-        )
+        # Shot type belirle - DAHA DETAYLI
+        if player_to_hoop_dist > 300:
+            shot_type = "UZAK (3PT)"
+        elif player_to_hoop_dist > 200:
+            shot_type = "ORTA"
+        elif player_to_hoop_dist > 100:
+            shot_type = "YAKIN"
+        else:
+            shot_type = "PAINT"  # Çok yakın şutlar için özel kategori
         
         # Log
         self._log_release_info(
@@ -314,14 +440,15 @@ class ShotDetectorModule:
                          HOLDING_THRESHOLD, RELEASE_THRESHOLD, perspective_factor,
                          shooter_frames):
         """Release bilgilerini logla"""
-        print(f"🏀 {shot_type} ŞUT ATILDI! [Derinlik: {depth_zone}]")
+        camera_proximity = "KAMERAYA YAKIN" if y_ratio > 0.7 else ""
+        print(f"🏀 {shot_type} ŞUT ATILDI! [Derinlik: {depth_zone}] {camera_proximity}")
         print(f"   Frame: {frame_count}, Oyuncu: P{self.shooter_id} "
               f"({'✓ Doğrulandı' if len(shooter_frames) > 0 else '⚠ Fallback'})")
         print(f"   Pozisyon: {self.release_player_pos}, Y-oranı: {y_ratio:.2f}")
         print(f"   Mesafe artışı: {dist_increase:.1f}px, Hız: {ball_velocity:.1f}px/f")
         print(f"   Potaya mesafe: {player_to_hoop_dist:.0f}px")
         print(f"   Threshold: HOLDING={HOLDING_THRESHOLD}px, "
-              f"RELEASE={RELEASE_THRESHOLD}px (faktör={perspective_factor:.1f})")
+              f"RELEASE={RELEASE_THRESHOLD}px (faktör={perspective_factor:.2f})")
         print(f"   Shooter frame sayısı: {len(shooter_frames)} (aynı oyuncuya ait)")
     
     def _draw_release_marker(self, frame, shot_type, depth_zone,
@@ -465,3 +592,4 @@ class ShotDetectorModule:
             'attempts': self.attempts,
             'percentage': (self.makes / self.attempts * 100) if self.attempts > 0 else 0
         }
+
