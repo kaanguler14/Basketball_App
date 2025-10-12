@@ -1,7 +1,6 @@
 import os
 import json
 import cv2
-import tkinter as tk
 from tkinter import messagebox
 import tkinter as tk
 from tkinter import ttk
