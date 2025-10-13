@@ -67,6 +67,9 @@ class ShotDetector:
         self.prev_time = 0.0
         self.fps = 0
 
+        # --- MINIMAP TOGGLE ---
+        self.show_minimap = True  # Minimap görünürlüğü (M tuşu ile toggle)
+
         # --- Homography ---
         ret, first_frame = self.cap.read()
         first_frame = cv2.resize(first_frame, (int(first_frame.shape[1]*scale), int(first_frame.shape[0]*scale)))
@@ -77,6 +80,10 @@ class ShotDetector:
 
     # ------------------------ RUN ------------------------
     def run(self):
+        # Tam ekran pencere oluştur
+        cv2.namedWindow("Basketball Tracker", cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty("Basketball Tracker", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        
         while True:
             ret, self.frame = self.cap.read()
             if not ret:
@@ -171,7 +178,7 @@ class ShotDetector:
                     if conf >= CONF_THRESHOLD:
                         detections.append(((x1, y1, x2 - x1, y2 - y1), conf, cls_index))
             tracks = self.deepsort.update_tracks(detections, frame=self.frame)
-
+            
             players = []
             for track in tracks:
                 if not track.is_confirmed():
@@ -190,7 +197,32 @@ class ShotDetector:
             self.shot_detection(players)
 
             # --- MINIMAP --- (shot_detector modülünden shot_history)
-            dm.draw_minimap(self.minimap_img,self.shot_detector.shot_history,players,self.H,self.use_flip,self.h_img)
+            minimap_display = dm.draw_minimap(self.minimap_img,self.shot_detector.shot_history,players,self.H,self.use_flip,self.h_img)
+
+            # --- MINIMAP OVERLAY (FIFA/PES tarzı) - M tuşu ile toggle ---
+            if self.show_minimap:
+                # Minimap boyutunu ayarla (frame'in %20'si kadar)
+                minimap_scale = 0.2  # Minimap frame boyutunun %20'si
+                minimap_width = int(self.frame.shape[1] * minimap_scale)
+                minimap_height = int(minimap_width * (minimap_display.shape[0] / minimap_display.shape[1]))
+                minimap_small = cv2.resize(minimap_display, (minimap_width, minimap_height))
+                
+                # Minimap pozisyonu (sağ alt köşe)
+                margin = 20  # Kenardan boşluk
+                y_offset = self.frame.shape[0] - minimap_height - margin
+                x_offset = self.frame.shape[1] - minimap_width - margin
+                
+                # Minimap'i frame üzerine yerleştir (overlay)
+                # Yarı saydam efekt için alpha blending
+                alpha = 0.8  # Opaklık (0=tamamen saydam, 1=tamamen opak)
+                overlay_region = self.frame[y_offset:y_offset+minimap_height, x_offset:x_offset+minimap_width]
+                blended = cv2.addWeighted(overlay_region, 1-alpha, minimap_small, alpha, 0)
+                self.frame[y_offset:y_offset+minimap_height, x_offset:x_offset+minimap_width] = blended
+                
+                # Minimap etrafına çerçeve çiz
+                cv2.rectangle(self.frame, (x_offset-2, y_offset-2), 
+                             (x_offset+minimap_width+2, y_offset+minimap_height+2), 
+                             (255, 255, 255), 2)
 
             # --- SCORE OVERLAY --- (shot_detector modülünden)
             if self.shot_detector.fade_counter > 0:
@@ -201,13 +233,24 @@ class ShotDetector:
             cv2.putText(self.frame, score_text, (50,50),
                         cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,0,255), 3)
 
-
             cv2.putText(self.frame, f"FPS: {int(self.fps)}", (20, self.frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+            
+            # Minimap durumu göster (sol alt, FPS'in üstünde)
+            minimap_status = "Minimap: ON (M)" if self.show_minimap else "Minimap: OFF (M)"
+            cv2.putText(self.frame, minimap_status, (20, self.frame.shape[0] - 50), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             self.frame_count += 1
-            cv2.imshow("Frame", self.frame)
-            if cv2.waitKey(1) & 0xFF == 27:
+            cv2.imshow("Basketball Tracker", self.frame)
+            
+            # Klavye kontrolü
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:  # ESC tuşu - Çıkış
                 break
+            elif key == ord('m') or key == ord('M'):  # M tuşu - Minimap toggle
+                self.show_minimap = not self.show_minimap
+                status = "AÇIK" if self.show_minimap else "KAPALI"
+                print(f"🗺️  Minimap: {status}")
         self.cap.release()
         cv2.destroyAllWindows()
 
@@ -224,7 +267,7 @@ class ShotDetector:
 
         if len(self.ball_pos) == 0:
             return
-        
+            
         # Release point detection (modüler)
         release_info = self.shot_detector.detect_shot(
             self.ball_pos, self.hoop_pos, players, 
