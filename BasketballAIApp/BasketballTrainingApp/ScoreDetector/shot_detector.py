@@ -8,6 +8,8 @@ tracking.py'den ayrıştırıldı - daha temiz ve maintainable kod.
 import cv2
 import math
 import numpy as np
+import json
+import os
 from utilsfixed import score, detect_down, detect_up
 
 
@@ -48,6 +50,9 @@ class ShotDetectorModule:
 
         # Shot history
         self.shot_history = []
+        
+        # Player scores tracking
+        self.player_scores = {}  # {player_id: {"points": total_points, "makes": count, "attempts": count}}
 
         # Configuration
         self.HISTORY_SIZE = 15  # Frame history boyutu
@@ -181,13 +186,13 @@ class ShotDetectorModule:
         """
         # DAHA YUMUŞAK perspektif faktörleri - aşırı büyütmeyi önle
         if y_ratio > 0.7:  # Kameraya çok yakın
-            return 1.25, "ÖN"
+            return 1.25, "ÖN"  # 1.5 -> 1.25 (daha yumuşak)
         elif y_ratio > 0.5:  # Orta-ön
-            return 1.1, "ORTA-ÖN"
+            return 1.1, "ORTA-ÖN"  # 1.2 -> 1.1
         elif y_ratio > 0.3:  # Orta-arka
             return 1.0, "ORTA"
         else:  # Çok arkada
-            return 0.85, "ARKA"
+            return 0.85, "ARKA"  # 0.8 -> 0.85
 
     def _calculate_dynamic_thresholds(self, player_to_hoop_dist, perspective_factor, y_ratio):
         """
@@ -215,9 +220,11 @@ class ShotDetectorModule:
             release = 30
 
         # Perspektif faktörünü uygula - KAMERAYA YAKIN = ÇOK DAHA YÜKSEK THRESHOLD!
+        # 3D'de yakın top, 2D projeksiyonda çok uzak görünür (150px+)
         holding = int(holding * perspective_factor * perspective_factor)  # Kare al (1.25^2 = 1.56)
 
         # EKSTRA BOOST: Kameraya ÇOK yakın oyuncular için (y_ratio > 0.95)
+        # Senin durumunda: y_ratio=0.99-1.00, mesafe=150px
         if y_ratio > 0.95:
             holding = int(holding * 2.0)  # 2x ek artış! (150px+ için)
         elif y_ratio > 0.85:
@@ -330,12 +337,7 @@ class ShotDetectorModule:
 
         # Frame'de görsel işaretleme
         self._draw_release_marker(
-            frame,
-            shot_type,
-            depth_zone,
-            HOLDING_THRESHOLD,
-            RELEASE_THRESHOLD,
-            shooter_frames,
+            frame, shot_type, depth_zone, HOLDING_THRESHOLD, RELEASE_THRESHOLD, shooter_frames
         )
 
         return {
@@ -360,19 +362,19 @@ class ShotDetectorModule:
         for i in range(len(self.ball_player_history) - 1, -1, -1):
             frame_data = self.ball_player_history[i]
 
-            if frame_data["player_id"] == self.shooter_id:
+            if frame_data.get("player_id") == self.shooter_id:
                 if frame_data["distance"] < HOLDING_THRESHOLD * 1.3:
                     shooter_frames.append(i)
                     if best_idx == -1:
                         best_idx = i
 
-            # Son 8 frame veya yeterli frame bulunduysa dur
+            # Son 8 frame yeterli
             if len(shooter_frames) >= 5:
                 break
 
         # Fallback: Eğer shooter bulunamazsa
         if best_idx == -1:
-            for i in range(len(self.ball_player_history) - 1, max(0, len(self.ball_player_history) - 4) - 1, -1):
+            for i in range(len(self.ball_player_history) - 1, max(0, len(self.ball_player_history) - 4), -1):
                 if self.ball_player_history[i]["distance"] < HOLDING_THRESHOLD * 1.2:
                     best_idx = i
                     break
@@ -385,7 +387,7 @@ class ShotDetectorModule:
             if confirmed_id is not None:
                 self.shooter_id = confirmed_id
         else:
-            # En son pozisyon (fallback)
+            # En son pozisyon
             position = self.ball_player_history[-1]["player_pos"]
 
         return position, shooter_frames
@@ -492,18 +494,24 @@ class ShotDetectorModule:
             self.attempts += 1
             made = score(ball_pos, hoop_pos)
 
+            # Minimap için shot pozisyonunu kaydet (2PT/3PT hesapla)
+            shot_data = self._record_shot_for_minimap(
+                made, H, use_flip, h_img, players, hoop_pos
+            )
+
+            # Overlay
             if made:
                 self.makes += 1
-                self.overlay_text = "Score"
+                points_text = "Score"
+                if shot_data and "points" in shot_data:
+                    points_text = f"{shot_data['points']} PT"
+                self.overlay_text = points_text
                 self.overlay_color = (0, 255, 0)
             else:
                 self.overlay_text = "Miss"
                 self.overlay_color = (0, 0, 255)
 
             self.fade_counter = self.fade_frames
-
-            # Minimap için shot pozisyonunu kaydet
-            shot_data = self._record_shot_for_minimap(made, H, use_flip, h_img, players)
 
             # Reset
             self.up = False
@@ -518,30 +526,50 @@ class ShotDetectorModule:
 
         return None
 
-    def _record_shot_for_minimap(self, made, H, use_flip, h_img, players):
+    def _record_shot_for_minimap(self, made, H, use_flip, h_img, players, hoop_pos):
         """Şutu minimap için kaydet"""
+        # Primary: release pozisyonunu kullan
         if self.release_player_pos and self.shooter_id is not None:
-            # Release pozisyonunu kullan
-            pt = np.array([[[self.release_player_pos[0], self.release_player_pos[1]]]], dtype=np.float32)
-            proj_pt = cv2.perspectiveTransform(pt, H)[0][0]
-            mx = int(proj_pt[0])
-            my = int(proj_pt[1])
+            try:
+                pt = np.array(
+                    [[[self.release_player_pos[0], self.release_player_pos[1]]]],
+                    dtype=np.float32,
+                )
+                proj_pt = cv2.perspectiveTransform(pt, H)[0][0]
+                mx = int(proj_pt[0])
+                my = int(proj_pt[1])
 
-            if use_flip:
-                my = h_img - my
+                if use_flip:
+                    my = h_img - my
 
-            self.shot_history.append((mx, my, made, self.shooter_id))
-            print(
-                f"📍 Minimap'e eklendi: ({mx}, {my}), Oyuncu: P{self.shooter_id}, "
-                f"{'BAŞARILI' if made else 'BAŞARISIZ'}"
-            )
+                # 3PT sınıflandırma - JSON'dan poligon oku
+                points_val = self._classify_shot_2pt_or_3pt(mx, my)
 
-            return {"minimap_pos": (mx, my), "made": made, "shooter_id": self.shooter_id}
-        else:
-            # Fallback: Mevcut oyuncu pozisyonunu kullan
-            if self.shooter_id is not None and players:
-                for p in players:
-                    if len(p) > 2 and p[2] == self.shooter_id:
+                self.shot_history.append((mx, my, made, self.shooter_id, points_val))
+                
+                # Oyuncu skorunu güncelle
+                self._update_player_score(self.shooter_id, made, points_val)
+                
+                print(
+                    f"📍 Minimap'e eklendi: ({mx}, {my}), Oyuncu: P{self.shooter_id}, "
+                    f"{'BAŞARILI' if made else 'BAŞARISIZ'} | {points_val}PT"
+                )
+
+                return {
+                    "minimap_pos": (mx, my),
+                    "made": made,
+                    "shooter_id": self.shooter_id,
+                    "points": points_val,
+                }
+            except Exception:
+                # Fallthrough to fallback below
+                pass
+
+        # Fallback: Mevcut oyuncu pozisyonunu kullan
+        if self.shooter_id is not None and players:
+            for p in players:
+                if len(p) > 2 and p[2] == self.shooter_id:
+                    try:
                         pt = np.array([[[p[0], p[1]]]], dtype=np.float32)
                         proj_pt = cv2.perspectiveTransform(pt, H)[0][0]
                         mx = int(proj_pt[0])
@@ -550,14 +578,102 @@ class ShotDetectorModule:
                         if use_flip:
                             my = h_img - my
 
-                        self.shot_history.append((mx, my, made, self.shooter_id))
+                        # 3PT sınıflandırma
+                        points_val = self._classify_shot_2pt_or_3pt(mx, my)
+
+                        self.shot_history.append((mx, my, made, self.shooter_id, points_val))
+                        
+                        # Oyuncu skorunu güncelle
+                        self._update_player_score(self.shooter_id, made, points_val)
+                        
                         print(
-                            f"📍 Minimap'e eklendi (FALLBACK): ({mx}, {my}), Oyuncu: P{self.shooter_id}"
+                            f"📍 Minimap'e eklendi (FALLBACK): ({mx}, {my}), Oyuncu: P{self.shooter_id} | {points_val}PT"
                         )
 
-                        return {"minimap_pos": (mx, my), "made": made, "shooter_id": self.shooter_id}
+                        return {
+                            "minimap_pos": (mx, my),
+                            "made": made,
+                            "shooter_id": self.shooter_id,
+                            "points": points_val,
+                        }
+                    except Exception:
+                        continue
 
         return None
+
+    def _classify_shot_2pt_or_3pt(self, mx, my):
+        """
+        Minimap koordinatlarına göre 2PT/3PT sınıflandırma.
+        
+        Args:
+            mx, my: Minimap üzerindeki şut pozisyonu
+            
+        Returns:
+            int: 2 veya 3
+        """
+        try:
+            # three_point_line.json'u oku
+            base_dir = os.path.dirname(__file__)
+            json_path = os.path.join(base_dir, "three_point_line.json")
+            
+            if not os.path.exists(json_path):
+                print(f"⚠️  {json_path} bulunamadı! Önce select_3pt_line.py'ı çalıştırın.")
+                return 2  # Varsayılan
+            
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            
+            points_3pt = data.get("points", [])
+            if len(points_3pt) < 3:
+                print(f"⚠️  3PT çizgisi yetersiz nokta içeriyor: {len(points_3pt)}")
+                return 2
+            
+            # Point-in-polygon test (OpenCV)
+            polygon = np.array(points_3pt, dtype=np.float32)
+            result = cv2.pointPolygonTest(polygon, (float(mx), float(my)), False)
+            
+            # result > 0: İçeride (2PT)
+            # result < 0: Dışarıda (3PT)
+            # result = 0: Çizgi üzerinde (2PT kabul edelim)
+            
+            points_val = 2 if result >= 0 else 3
+            
+            return points_val
+            
+        except Exception as e:
+            print(f"⚠️  3PT sınıflandırma hatası: {e}")
+            return 2  # Varsayılan
+
+    def _update_player_score(self, player_id, made, points_val):
+        """
+        Oyuncu skorunu güncelle.
+        
+        Args:
+            player_id: Oyuncu ID'si
+            made: Şut başarılı mı? (True/False)
+            points_val: Kazanılan puan (2 veya 3)
+        """
+        if player_id is None:
+            return
+            
+        # Oyuncu ilk kez görülüyorsa, kayıt oluştur
+        if player_id not in self.player_scores:
+            self.player_scores[player_id] = {
+                "points": 0,
+                "makes": 0,
+                "attempts": 0
+            }
+        
+        # Deneme sayısını artır
+        self.player_scores[player_id]["attempts"] += 1
+        
+        # Başarılı şutta puan ekle
+        if made:
+            self.player_scores[player_id]["points"] += points_val
+            self.player_scores[player_id]["makes"] += 1
+            
+        print(f"🏀 Oyuncu P{player_id} Skorlar: {self.player_scores[player_id]['points']} puan "
+              f"({self.player_scores[player_id]['makes']}/{self.player_scores[player_id]['attempts']})")
 
     def update_fade(self):
         """Fade counter'ı güncelle"""
@@ -571,3 +687,7 @@ class ShotDetectorModule:
             "attempts": self.attempts,
             "percentage": (self.makes / self.attempts * 100) if self.attempts > 0 else 0,
         }
+    
+    def get_player_scores(self):
+        """Oyuncu skorlarını döndür"""
+        return self.player_scores

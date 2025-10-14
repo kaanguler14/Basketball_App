@@ -32,6 +32,23 @@ scale = 0.5  # video resize
 
 class ShotDetector:
     def __init__(self):
+        # --- Oyuncu sayısını kullanıcıdan al ---
+        print("\n" + "="*50)
+        print("🏀 BASKETBOL TRACKING SISTEMI 🏀")
+        print("="*50)
+        while True:
+            try:
+                num_players = int(input("Kaç oyuncu var? (1 veya 2): "))
+                if num_players in [1, 2]:
+                    self.num_players = num_players
+                    print(f"✓ {num_players} oyuncu seçildi!")
+                    break
+                else:
+                    print("❌ Lütfen 1 veya 2 girin!")
+            except ValueError:
+                print("❌ Lütfen geçerli bir sayı girin!")
+        print("="*50 + "\n")
+        
         # --- YOLO MODELLERİ ---
         self.model_ball = YOLO("D://repos//Basketball_App//BasketballAIApp//Trainings//kagglebest.pt")
         self.model_player = YOLO("D://repos//Basketball_App//yolov8s.pt")  # person detection
@@ -46,7 +63,7 @@ class ShotDetector:
         )
 
         # --- VIDEO / MINIMAP ---
-        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training7.mp4")
+        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training2.mp4")
         self.minimap_img = cv2.imread(r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\Homography\images\hom.png")
         self.frame_count = 0
         self.frame = None
@@ -69,6 +86,9 @@ class ShotDetector:
 
         # --- MINIMAP TOGGLE ---
         self.show_minimap = True  # Minimap görünürlüğü (M tuşu ile toggle)
+        
+        # --- DETECTED PLAYERS ---
+        self.detected_players = set()  # Tespit edilen oyuncu ID'leri
 
         # --- Homography ---
         ret, first_frame = self.cap.read()
@@ -187,6 +207,9 @@ class ShotDetector:
                 l, t, w, h = track.to_ltwh()
                 cx, cy = int(l + w/2), int(t + h)
                 players.append((cx, cy, track_id))
+                
+                # Tespit edilen oyuncuları kaydet
+                self.detected_players.add(track_id)
 
                 cv2.circle(self.frame, (cx, cy), 5, (0, 255, 255), -1)
                 cv2.putText(self.frame, f"P{track_id}", (int(l), int(t) - 10),
@@ -228,10 +251,9 @@ class ShotDetector:
             if self.shot_detector.fade_counter > 0:
                 cv2.putText(self.frame, self.shot_detector.overlay_text, (50,100),
                             cv2.FONT_HERSHEY_SIMPLEX, 2, self.shot_detector.overlay_color, 4)
-            # --- TOTAL SCORE DISPLAY --- (shot_detector modülünden)
-            score_text = f"Score: {self.shot_detector.makes}/{self.shot_detector.attempts}"
-            cv2.putText(self.frame, score_text, (50,50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0,0,255), 3)
+            
+            # --- SCOREBOARD --- (Dijital basketbol scoreboard)
+            self.draw_scoreboard()
 
             cv2.putText(self.frame, f"FPS: {int(self.fps)}", (20, self.frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
             
@@ -253,6 +275,118 @@ class ShotDetector:
                 print(f"🗺️  Minimap: {status}")
         self.cap.release()
         cv2.destroyAllWindows()
+
+    # ------------------------ SCOREBOARD ------------------------
+    def draw_scoreboard(self):
+        """Klasik basketbol scoreboard - dijital skor göstergesi"""
+        player_scores = self.shot_detector.get_player_scores()
+        
+        # Scoreboard pozisyonu ve boyutu (oyuncu sayısına göre) - TOTAL olmadan
+        if self.num_players == 1:
+            board_width = 100
+            board_height = 45
+        else:  # 2 oyuncu
+            board_width = 160
+            board_height = 45
+        
+        start_x = 10
+        start_y = 10
+        
+        # Overlay için
+        overlay = self.frame.copy()
+        
+        # Ana scoreboard arka plan (koyu gri/siyah)
+        cv2.rectangle(overlay, (start_x, start_y), 
+                     (start_x + board_width, start_y + board_height), (25, 25, 25), -1)
+        
+        # Çerçeve (kalın beyaz)
+        cv2.rectangle(overlay, (start_x, start_y), 
+                     (start_x + board_width, start_y + board_height), (200, 200, 200), 2)
+        
+        # İç çerçeve (ince)
+        cv2.rectangle(overlay, (start_x + 3, start_y + 3), 
+                     (start_x + board_width - 3, start_y + board_height - 3), (100, 100, 100), 1)
+        
+        # Gerçek player skorlarını al
+        all_players = {}
+        
+        # Tespit edilen oyuncuları kullan
+        detected_list = sorted(list(self.detected_players))[:self.num_players]
+        
+        for player_id in detected_list:
+            if player_id in player_scores:
+                all_players[player_id] = player_scores[player_id]
+            else:
+                # Tespit edilmiş ama henüz şut atmamış
+                all_players[player_id] = {"points": 0, "makes": 0, "attempts": 0}
+        
+        # Eğer henüz yeterli oyuncu tespit edilmediyse, placeholder ekle
+        if len(detected_list) < self.num_players:
+            for i in range(len(detected_list), self.num_players):
+                placeholder_id = -(i + 1)
+                all_players[placeholder_id] = {"points": 0, "makes": 0, "attempts": 0}
+        
+        # Oyuncuları puana göre sırala ve sadece seçilen sayıda göster
+        sorted_players = sorted(all_players.items(), key=lambda x: x[1]['points'], reverse=True)[:self.num_players]
+        
+        # Oyuncu skorları (TOTAL olmadan, direkt başla)
+        player_section_y = start_y + 8
+        
+        # Tüm oyuncuları göster
+        player_width = board_width // self.num_players
+        
+        for idx, (player_id, stats) in enumerate(sorted_players):
+            player_x = start_x + (idx * player_width)
+            
+            # Oyuncu bölmesi
+            if idx > 0:
+                # Dikey ayırıcı çizgi
+                cv2.line(overlay, (player_x, start_y + 5), 
+                        (player_x, start_y + board_height - 5), (60, 60, 60), 1)
+            
+            # Oyuncu etiketi (negatif ID'leri düzelt)
+            try:
+                if isinstance(player_id, int) and player_id < 0:
+                    player_label = "---"  # Henüz tespit edilmemiş oyuncu
+                else:
+                    player_label = f"P{player_id}"
+            except:
+                player_label = f"P{player_id}"
+            label_size = cv2.getTextSize(player_label, cv2.FONT_HERSHEY_SIMPLEX, 0.3, 1)[0]
+            label_x = player_x + (player_width - label_size[0]) // 2
+            cv2.putText(overlay, player_label, (label_x, player_section_y + 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, (180, 180, 180), 1)
+            
+            # Oyuncu puanı (büyük dijital)
+            points = stats['points']
+            points_text = f"{points:02d}"
+            points_size = cv2.getTextSize(points_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+            points_x = player_x + (player_width - points_size[0]) // 2
+            
+            # Renkli puan (sıralamaya göre)
+            if idx == 0:
+                points_color = (0, 215, 255)  # Altın
+            elif idx == 1:
+                points_color = (192, 192, 192)  # Gümüş
+            else:
+                points_color = (112, 162, 205)  # Bronz
+            
+            cv2.putText(overlay, points_text, (points_x, player_section_y + 28), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, points_color, 2)
+            
+            # İstatistikler (küçük)
+            made_att = f"{stats['makes']}/{stats['attempts']}"
+            accuracy = (stats['makes'] / stats['attempts'] * 100) if stats['attempts'] > 0 else 0
+            stats_text = f"{accuracy:.0f}%"
+            stats_size = cv2.getTextSize(stats_text, cv2.FONT_HERSHEY_SIMPLEX, 0.25, 1)[0]
+            stats_x = player_x + (player_width - stats_size[0]) // 2
+            
+            cv2.putText(overlay, stats_text, (stats_x, player_section_y + 38), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.25, (150, 200, 255), 1)
+        
+        # Overlay'i uygula
+        alpha = 0.90
+        cv2.addWeighted(overlay, alpha, self.frame, 1 - alpha, 0, self.frame)
 
     # ------------------------ CLEAN / DETECT ------------------------
     def clean_motion(self):
