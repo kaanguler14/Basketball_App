@@ -4,3 +4,7 @@ cvzone
 numpy
 torch
 torchvision
+scipy
+mediapipe
+deep-sort-realtime
+Pillow

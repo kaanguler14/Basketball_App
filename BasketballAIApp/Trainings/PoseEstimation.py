@@ -20,7 +20,7 @@ stop_flag=False
 
 model_path="D://BasketballAIApp//Models//PoseEstimation//pose_landmarker_full.task"
 
-video_path="D://BasketballAIApp//clips//trainingclips.mp4"
+video_path=r"D:\repos\Basketball_App\BasketballAIApp\clips\training7.mp4"
 
 num_poses=4
 min_pose_detection_confidence=0.7
