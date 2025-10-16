@@ -12,8 +12,11 @@ Unlike existing apps that only count shots or focus on dribbling, this project f
 - Ball trajectory and scoring system are implemented
 - Double counting issue has been resolved
 - A minimap for player and ball visualization has been added (still needs refinement during player jumps)
+- Score system added, now including 2-point and 3-point differentiation
+- Player detection system implemented
 
-Demo : https://youtu.be/z2rsAT5oaXs
+
+Demo : https://youtu.be/inXI5wmToNo
   
 
 ## Future Work
@@ -68,7 +71,7 @@ git clone https://huggingface.co/naakgs/ballAndHoopDetector models/ballAndHoopDe
 Run the main script with your video input:
 
 ```bash
-python BasketballAIApp/BasketballTrainingApp/ScoreDetector/homdet.py
+python BasketballAIApp/BasketballTrainingApp/ScoreDetector/tracking.py
 ```
 
 ### 6. Output
@@ -80,4 +83,4 @@ python BasketballAIApp/BasketballTrainingApp/ScoreDetector/homdet.py
 ### 7. Example Demo
 
 You can check a working demo here:
-[Demo Video](https://youtu.be/z2rsAT5oaXs)
+[Demo Video](https://youtu.be/inXI5wmToNo)

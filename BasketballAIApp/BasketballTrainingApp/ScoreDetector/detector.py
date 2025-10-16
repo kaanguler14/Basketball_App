@@ -12,7 +12,9 @@ class ShotDetector:
         #load the YOLO model
         self.overlay_text="waiting.."
         self.model=YOLO("D://repos//Basketball_App//BasketballAIApp//Trainings//kagglebest.pt")
-
+        self.minimap=cv2.imread("D://repos//Basketball_App//BasketballAIApp//BasketballTrainingApp//Homography//images//bc.png")
+        self.shot_history=[] #x , y , attempt
+        self.player_history=[]
         #Uncomment this line to accelerate inference .Note that this may cause  errors in some setups
         #self.model.half()
 
@@ -23,7 +25,7 @@ class ShotDetector:
         #self.cap=cv2.VideoCapture(0)
 
         #use video
-        self.cap=cv2.VideoCapture("D://repos//Basketball_App//BasketballAIApp//clips//training5.mp4")
+        self.cap=cv2.VideoCapture("D://repos//Basketball_App//BasketballAIApp//clips//training7.mp4")
 
         self.ball_pos=[] #array of tuples ((x_pos,y_pos)),frame_count,width,height,conf)
         self.hoop_pos=[] #array of tuples ((x_pos,y_pos),frame_count,width,height,conf)
@@ -53,7 +55,7 @@ class ShotDetector:
                 #end of video or an error occured
                 print("Error")
                 break
-            #self.frame = cv2.resize(self.frame, (1080, 720))
+            self.frame = cv2.resize(self.frame, (1080, 720))
             print(f"self.frame.shape {self.frame.shape}")
             results=self.model(self.frame,stream=True,device=self.device)
             print("okundu")
@@ -89,6 +91,7 @@ class ShotDetector:
             self.clean_motion()
             self.shot_detection()
             self.display_score()
+            self.draw_minimap()
             self.frame_count+=1
 
             cv2.imshow("Frame",self.frame)
@@ -99,6 +102,7 @@ class ShotDetector:
 
         self.cap.release()
         cv2.destroyAllWindows()
+
 
     def clean_motion(self):
         #clean and display ball motion
@@ -115,9 +119,10 @@ class ShotDetector:
         if len(self.hoop_pos)>0 and len(self.ball_pos)>0:
             #detecting when ball is in up and down area ball can only be in down area after it is in up
             if not self.up:
-                self.up=detect_up(self.frame,self.ball_pos,self.hoop_pos)
+                self.up=detect_up(self.ball_pos,self.hoop_pos)
                 if self.up:
                     self.up_frame=self.ball_pos[-1][1]
+                    self.release_pos=self.ball_pos[-1][0]
 
             if self.up and not self.down:
                 self.down=detect_down(self.ball_pos,self.hoop_pos)
@@ -141,6 +146,12 @@ class ShotDetector:
                         self.overlay_color=(255,0,0) #red for miss
                         self.overlay_text="Miss"
                         self.fade_counter=self.fade_frames
+                    if hasattr(self,"release_pos"):
+                        map_h,map_w=self.minimap.shape[:2]
+                        frame_h,frame_w=self.frame.shape[:2]
+                        mx=int(self.release_pos[0]/frame_w*map_w)
+                        my=int(self.release_pos[1]/frame_h*map_h)
+                        self.shot_history.append((mx,my,score(self.ball_pos,self.hoop_pos)))
     def display_score(self):
         #add text
         text=str(self.makes)+"/"+str(self.attempts)
@@ -164,6 +175,13 @@ class ShotDetector:
             self.frame=cv2.addWeighted(self.frame,1-alpha,np.full_like(self.frame,self.overlay_color),alpha,0)
             self.fade_counter-=1
 
+    def draw_minimap(self):
+        minimap=self.minimap.copy()
+        for (x,y,made) in self.shot_history:
+            color=(0,255,0) if made else (0,0,255)
+            cv2.line(minimap,(x-10,y-10),(x+10,y+10),color,2)
+            cv2.line(minimap,(x-10,y+10),(x+10,y-10),color,2)
+        cv2.imshow("ShotMaster",minimap)
 
 if __name__=="__main__":
     ShotDetector()

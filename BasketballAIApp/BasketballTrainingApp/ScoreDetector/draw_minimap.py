@@ -7,11 +7,15 @@ def draw_minimap(minimap_img,shot_history, players,H,use_flip,h_img):
 
     # Şut pozisyonlarını işaretle (RELEASE POINT'ler)
     for shot_data in shot_history:
-        if len(shot_data) == 4:
-            mx, my, made, shooter_id = shot_data
-        else:
-            mx, my, made = shot_data
-            shooter_id = None
+        mx = shot_data[0]
+        my = shot_data[1]
+        made = shot_data[2]
+        shooter_id = None
+        points_val = None
+        if len(shot_data) >= 4:
+            shooter_id = shot_data[3]
+        if len(shot_data) >= 5:
+            points_val = shot_data[4]
 
         # Renk: Yeşil = başarılı, Kırmızı = kaçan
         color = (0, 255, 0) if made else (0, 0, 255)
@@ -23,10 +27,15 @@ def draw_minimap(minimap_img,shot_history, players,H,use_flip,h_img):
         # Daire (release point vurgusu)
         cv2.circle(minimap_copy, (mx, my), 8, color, 2)
 
-        # Oyuncu ID'si (varsa)
+        # Oyuncu ID/puan (varsa)
+        label_parts = []
         if shooter_id is not None:
-            cv2.putText(minimap_copy, f"P{shooter_id}", (mx + 12, my - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+            label_parts.append(f"P{shooter_id}")
+        if points_val is not None:
+            label_parts.append(f"{points_val}PT")
+        if label_parts:
+            cv2.putText(minimap_copy, " ".join(label_parts), (mx + 12, my - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
 
     # Oyuncular (cx,cy,ID)
     for cx, cy, pid in players:
@@ -46,4 +55,6 @@ def draw_minimap(minimap_img,shot_history, players,H,use_flip,h_img):
             cv2.putText(minimap_copy, "OUT", (np.clip(display_x, 0, minimap_copy.shape[1] - 1) + 6,
                                               np.clip(display_y, 0, minimap_copy.shape[0] - 1) - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-    cv2.imshow("Minimap AR", minimap_copy)
+    
+    # Return the minimap for display
+    return minimap_copy

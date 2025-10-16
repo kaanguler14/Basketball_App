@@ -3,10 +3,10 @@ import cv2
 import time
 
 # Model yükle
-model = YOLO("D://BasketballAIApp//Trainings//runs//detect//train2//weights//best.pt")
+model = YOLO("D://repos//Basketball_App//BasketballAIApp//Trainings//kagglebest.pt")
 
 # Video aç
-video_path = "D://BasketballAIApp//clips//trainingclips.mp4"
+video_path = "D://repos//Basketball_App//BasketballAIApp//clips//training2.mp4"
 cap = cv2.VideoCapture(video_path)
 
 # FPS ölçümü için başlangıç
@@ -15,13 +15,16 @@ prev_time = 0
 while True:
     ret, frame = cap.read()
     if not ret:
+        print("Video okunamadı veya bitti:", video_path)
+
         break
 
+    print("okundu")
     # Çözünürlüğü küçült (ör: yarı boyut)
     frame = cv2.resize(frame, (640, 360))
 
     # Model çalıştır
-    results = model.track(frame, persist=True, classes=[0], conf=0.6)
+    results = model.track(frame, persist=True, conf=0.6)
     frame_ = results[0].plot()
 
     # FPS hesapla

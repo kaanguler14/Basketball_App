@@ -3,22 +3,19 @@
 from ultralytics import YOLO
 import cv2
 import cvzone
-import math
 import numpy as np
-import pose
-from utilsfixed import score, detect_down, detect_up, in_hoop_region, clean_hoop_pos, clean_ball_pos, get_device
 import time
-# ------------------ DeepSORT ------------------
+from PIL import Image, ImageDraw, ImageFont
+
+
+
+from utilsfixed import in_hoop_region, clean_hoop_pos, clean_ball_pos, get_device
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import pointSelection as ps
-from BasketballAIApp.BasketballTrainingApp.Homography import homography as h
-import detection as det
+from BasketballAIApp.BasketballTrainingApp.ScoreDetector import homography as h
 import draw_minimap as dm
-# ------------------ MODULAR SHOT DETECTOR ------------------
 from shot_detector import ShotDetectorModule
 
-
-# ------------------------ CONFIG ------------------------
 court_labels = [
     "top_left", "top_right","top", "bottom_right", "bottom_left",
     "free_throw_left", "free_throw_right",
@@ -32,10 +29,7 @@ scale = 0.5  # video resize
 
 class ShotDetector:
     def __init__(self):
-        # --- Oyuncu sayısını kullanıcıdan al ---
-        print("\n" + "="*50)
-        print("🏀 BASKETBOL TRACKING SISTEMI 🏀")
-        print("="*50)
+
         while True:
             try:
                 num_players = int(input("Kaç oyuncu var? (1 veya 2): "))
@@ -51,7 +45,7 @@ class ShotDetector:
         
         # --- YOLO MODELLERİ ---
         self.model_ball = YOLO("D://repos//Basketball_App//BasketballAIApp//Trainings//kagglebest.pt")
-        self.model_player = YOLO("D://repos//Basketball_App//yolov8s.pt")  # person detection
+        self.model_player = YOLO(r"D:\repos\Basketball_App\BasketballAIApp\Models\yolov8s.pt")  # person detection
         self.device = get_device()
 
         # --- DeepSORT Tracker ---
@@ -63,8 +57,8 @@ class ShotDetector:
         )
 
         # --- VIDEO / MINIMAP ---
-        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training2.mp4")
-        self.minimap_img = cv2.imread(r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\Homography\images\hom.png")
+        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training7.mp4")
+        self.minimap_img = cv2.imread(r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\images\hom.png")
         self.frame_count = 0
         self.frame = None
 
@@ -276,117 +270,170 @@ class ShotDetector:
         self.cap.release()
         cv2.destroyAllWindows()
 
-    # ------------------------ SCOREBOARD ------------------------
+    # ------------------------ SCOREBOARD (PIL) ------------------------
     def draw_scoreboard(self):
-        """Klasik basketbol scoreboard - dijital skor göstergesi"""
+        """Modern estetik scoreboard - PIL ile"""
         player_scores = self.shot_detector.get_player_scores()
         
-        # Scoreboard pozisyonu ve boyutu (oyuncu sayısına göre) - TOTAL olmadan
+        # Scoreboard boyutu (biraz daha büyük)
         if self.num_players == 1:
-            board_width = 100
-            board_height = 45
+            board_width = 140
+            board_height = 65
         else:  # 2 oyuncu
-            board_width = 160
-            board_height = 45
+            board_width = 240
+            board_height = 65
         
-        start_x = 10
-        start_y = 10
+        # PIL Image oluştur (RGBA for transparency)
+        scoreboard_img = Image.new('RGBA', (board_width, board_height), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(scoreboard_img)
         
-        # Overlay için
-        overlay = self.frame.copy()
+        # Gradient arka plan oluştur (daha belirgin)
+        for y in range(board_height):
+            # Üstten alta: koyu mavi -> siyah gradient
+            progress = y / board_height
+            r = int(20 - progress * 10)
+            g = int(25 - progress * 15)
+            b = int(40 - progress * 20)
+            alpha = int(240 - progress * 30)
+            color = (r, g, b, alpha)
+            draw.rectangle([(0, y), (board_width, y + 1)], fill=color)
         
-        # Ana scoreboard arka plan (koyu gri/siyah)
-        cv2.rectangle(overlay, (start_x, start_y), 
-                     (start_x + board_width, start_y + board_height), (25, 25, 25), -1)
+        # Çerçeve (dış - parlak)
+        draw.rectangle([(0, 0), (board_width - 1, board_height - 1)], 
+                      outline=(255, 255, 255, 255), width=2)
+        # İç çerçeve (ince - subtle)
+        draw.rectangle([(3, 3), (board_width - 4, board_height - 4)], 
+                      outline=(100, 100, 120, 200), width=1)
         
-        # Çerçeve (kalın beyaz)
-        cv2.rectangle(overlay, (start_x, start_y), 
-                     (start_x + board_width, start_y + board_height), (200, 200, 200), 2)
-        
-        # İç çerçeve (ince)
-        cv2.rectangle(overlay, (start_x + 3, start_y + 3), 
-                     (start_x + board_width - 3, start_y + board_height - 3), (100, 100, 100), 1)
+        # Font yükle (system fonts kullan)
+        try:
+            # Windows için tam yol
+            font_path = r"C:\Windows\Fonts\arial.ttf"
+            font_path_bold = r"C:\Windows\Fonts\arialbd.ttf"
+            font_label = ImageFont.truetype(font_path, 13)
+            font_score = ImageFont.truetype(font_path_bold, 26)  # Bold
+            font_stats = ImageFont.truetype(font_path, 11)
+            print("✓ Fonts loaded successfully")
+        except Exception as e:
+            print(f"⚠️ Font loading failed: {e}, using default")
+            # Fallback - daha büyük boyutlar
+            font_label = ImageFont.load_default()
+            font_score = ImageFont.load_default()
+            font_stats = ImageFont.load_default()
         
         # Gerçek player skorlarını al
         all_players = {}
-        
-        # Tespit edilen oyuncuları kullan
         detected_list = sorted(list(self.detected_players))[:self.num_players]
         
         for player_id in detected_list:
             if player_id in player_scores:
                 all_players[player_id] = player_scores[player_id]
             else:
-                # Tespit edilmiş ama henüz şut atmamış
                 all_players[player_id] = {"points": 0, "makes": 0, "attempts": 0}
         
-        # Eğer henüz yeterli oyuncu tespit edilmediyse, placeholder ekle
         if len(detected_list) < self.num_players:
             for i in range(len(detected_list), self.num_players):
                 placeholder_id = -(i + 1)
                 all_players[placeholder_id] = {"points": 0, "makes": 0, "attempts": 0}
         
-        # Oyuncuları puana göre sırala ve sadece seçilen sayıda göster
         sorted_players = sorted(all_players.items(), key=lambda x: x[1]['points'], reverse=True)[:self.num_players]
         
-        # Oyuncu skorları (TOTAL olmadan, direkt başla)
-        player_section_y = start_y + 8
-        
-        # Tüm oyuncuları göster
+        # Oyuncuları çiz
         player_width = board_width // self.num_players
         
         for idx, (player_id, stats) in enumerate(sorted_players):
-            player_x = start_x + (idx * player_width)
+            player_x = idx * player_width
             
-            # Oyuncu bölmesi
+            # Dikey ayırıcı (2. oyuncudan itibaren) - daha belirgin
             if idx > 0:
-                # Dikey ayırıcı çizgi
-                cv2.line(overlay, (player_x, start_y + 5), 
-                        (player_x, start_y + board_height - 5), (60, 60, 60), 1)
+                # Gölge
+                draw.line([(player_x + 1, 5), (player_x + 1, board_height - 5)], 
+                         fill=(0, 0, 0, 100), width=1)
+                # Ana çizgi
+                draw.line([(player_x, 5), (player_x, board_height - 5)], 
+                         fill=(120, 120, 150, 200), width=2)
             
-            # Oyuncu etiketi (negatif ID'leri düzelt)
+            # Oyuncu etiketi
             try:
                 if isinstance(player_id, int) and player_id < 0:
-                    player_label = "---"  # Henüz tespit edilmemiş oyuncu
+                    player_label = "---"
                 else:
                     player_label = f"P{player_id}"
             except:
                 player_label = f"P{player_id}"
-            label_size = cv2.getTextSize(player_label, cv2.FONT_HERSHEY_SIMPLEX, 0.3, 1)[0]
-            label_x = player_x + (player_width - label_size[0]) // 2
-            cv2.putText(overlay, player_label, (label_x, player_section_y + 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.3, (180, 180, 180), 1)
             
-            # Oyuncu puanı (büyük dijital)
+            # Merkeze hizala
+            bbox = draw.textbbox((0, 0), player_label, font=font_label)
+            label_width = bbox[2] - bbox[0]
+            label_x = player_x + (player_width - label_width) // 2
+            
+            # Gölge efekti (label) - daha belirgin
+            draw.text((label_x + 2, 11), player_label, fill=(0, 0, 0, 200), font=font_label)
+            draw.text((label_x, 9), player_label, fill=(220, 220, 240, 255), font=font_label)
+            
+            # Puan
             points = stats['points']
             points_text = f"{points:02d}"
-            points_size = cv2.getTextSize(points_text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-            points_x = player_x + (player_width - points_size[0]) // 2
             
-            # Renkli puan (sıralamaya göre)
+            # Renk (sıralamaya göre)
             if idx == 0:
-                points_color = (0, 215, 255)  # Altın
+                score_color = (255, 215, 0, 255)  # Altın (RGB reversed for PIL)
             elif idx == 1:
-                points_color = (192, 192, 192)  # Gümüş
+                score_color = (192, 192, 192, 255)  # Gümüş
             else:
-                points_color = (112, 162, 205)  # Bronz
+                score_color = (205, 162, 112, 255)  # Bronz
             
-            cv2.putText(overlay, points_text, (points_x, player_section_y + 28), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, points_color, 2)
+            # Puan merkezle
+            bbox = draw.textbbox((0, 0), points_text, font=font_score)
+            score_width = bbox[2] - bbox[0]
+            score_x = player_x + (player_width - score_width) // 2
             
-            # İstatistikler (küçük)
-            made_att = f"{stats['makes']}/{stats['attempts']}"
+            # Gölge efekti (puan) - daha belirgin
+            draw.text((score_x + 2, 30), points_text, fill=(0, 0, 0, 220), font=font_score)
+            draw.text((score_x, 28), points_text, fill=score_color, font=font_score)
+            
+            # İstatistikler
             accuracy = (stats['makes'] / stats['attempts'] * 100) if stats['attempts'] > 0 else 0
             stats_text = f"{accuracy:.0f}%"
-            stats_size = cv2.getTextSize(stats_text, cv2.FONT_HERSHEY_SIMPLEX, 0.25, 1)[0]
-            stats_x = player_x + (player_width - stats_size[0]) // 2
             
-            cv2.putText(overlay, stats_text, (stats_x, player_section_y + 38), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.25, (150, 200, 255), 1)
+            bbox = draw.textbbox((0, 0), stats_text, font=font_stats)
+            stats_width = bbox[2] - bbox[0]
+            stats_x = player_x + (player_width - stats_width) // 2
+            
+            # Stats rengi (performansa göre)
+            if accuracy >= 70:
+                stats_color = (100, 255, 100, 255)  # Yeşil
+            elif accuracy >= 50:
+                stats_color = (255, 200, 100, 255)  # Turuncu
+            else:
+                stats_color = (255, 100, 100, 255)  # Kırmızı
+            
+            # Gölge efekti (stats)
+            draw.text((stats_x + 1, 55), stats_text, fill=(0, 0, 0, 180), font=font_stats)
+            draw.text((stats_x, 54), stats_text, fill=stats_color, font=font_stats)
         
-        # Overlay'i uygula
-        alpha = 0.90
-        cv2.addWeighted(overlay, alpha, self.frame, 1 - alpha, 0, self.frame)
+        # PIL Image'ı numpy array'e çevir
+        scoreboard_np = np.array(scoreboard_img)
+        
+        # RGBA'yı BGR'ye çevir (OpenCV formatı)
+        scoreboard_bgr = cv2.cvtColor(scoreboard_np, cv2.COLOR_RGBA2BGRA)
+        
+        # Alpha channel'ı ayır
+        alpha_channel = scoreboard_bgr[:, :, 3] / 255.0
+        
+        # Scoreboard pozisyonu
+        start_x, start_y = 10, 10
+        
+        # Frame bölgesini al
+        roi = self.frame[start_y:start_y + board_height, start_x:start_x + board_width]
+        
+        # Alpha blending
+        for c in range(3):
+            roi[:, :, c] = (alpha_channel * scoreboard_bgr[:, :, c] + 
+                           (1 - alpha_channel) * roi[:, :, c])
+        
+        # Geri yerleştir
+        self.frame[start_y:start_y + board_height, start_x:start_x + board_width] = roi
 
     # ------------------------ CLEAN / DETECT ------------------------
     def clean_motion(self):

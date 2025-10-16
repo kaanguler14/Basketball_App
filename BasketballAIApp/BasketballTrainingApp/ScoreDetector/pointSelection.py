@@ -10,7 +10,7 @@ court_labels = [
     "center_circle", "paint_left", "paint_right"
 ]
 minimap_img = cv2.imread(
-    r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\Homography\images\hom.png")
+    r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\images\hom.png")
 
 vp_json = "video_points.json"
 mp_json = "minimap_points.json"
