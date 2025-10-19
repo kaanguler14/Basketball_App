@@ -6,13 +6,14 @@ import cvzone
 import numpy as np
 import time
 from PIL import Image, ImageDraw, ImageFont
+import mediapipe as mp
 
 
 
 from utilsfixed import in_hoop_region, clean_hoop_pos, clean_ball_pos, get_device
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import pointSelection as ps
-from BasketballAIApp.BasketballTrainingApp.ScoreDetector import homography as h
+import homography as h
 import draw_minimap as dm
 from shot_detector import ShotDetectorModule
 
@@ -47,6 +48,20 @@ class ShotDetector:
         self.model_ball = YOLO("D://repos//Basketball_App//BasketballAIApp//Trainings//kagglebest.pt")
         self.model_player = YOLO(r"D:\repos\Basketball_App\BasketballAIApp\Models\yolov8s.pt")  # person detection
         self.device = get_device()
+        
+        # --- MEDIAPIPE POSE ---
+        self.mp_pose = mp.solutions.pose
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_drawing_styles = mp.solutions.drawing_styles
+        self.pose = self.mp_pose.Pose(
+            static_image_mode=False,
+            model_complexity=1,  # 0, 1, veya 2 (2 en yüksek doğruluk ama yavaş)
+            smooth_landmarks=True,
+            enable_segmentation=False,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+        print("✓ MediaPipe Pose başlatıldı!")
 
         # --- DeepSORT Tracker ---
         self.deepsort = DeepSort(
@@ -57,7 +72,7 @@ class ShotDetector:
         )
 
         # --- VIDEO / MINIMAP ---
-        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training7.mp4")
+        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training2.mp4")
         self.minimap_img = cv2.imread(r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\images\hom.png")
         self.frame_count = 0
         self.frame = None
@@ -81,6 +96,9 @@ class ShotDetector:
         # --- MINIMAP TOGGLE ---
         self.show_minimap = True  # Minimap görünürlüğü (M tuşu ile toggle)
         
+        # --- POSE ESTIMATION TOGGLE ---
+        self.show_pose = True  # Pose estimation görünürlüğü (P tuşu ile toggle)
+        
         # --- DETECTED PLAYERS ---
         self.detected_players = set()  # Tespit edilen oyuncu ID'leri
 
@@ -92,6 +110,82 @@ class ShotDetector:
 
         self.run()
 
+    # ------------------------ POSE ESTIMATION ------------------------
+    def estimate_pose_for_player(self, frame, bbox):
+        """
+        Bir oyuncu bounding box'ı için pose estimation yapar
+        bbox: (left, top, width, height)
+        """
+        l, t, w, h = bbox
+        
+        # Bounding box'ı biraz genişlet (padding ekle)
+        padding = 20
+        x1 = max(0, int(l) - padding)
+        y1 = max(0, int(t) - padding)
+        x2 = min(frame.shape[1], int(l + w) + padding)
+        y2 = min(frame.shape[0], int(t + h) + padding)
+        
+        # Oyuncu crop'u
+        player_crop = frame[y1:y2, x1:x2]
+        
+        if player_crop.size == 0:
+            return None
+        
+        # BGR to RGB
+        player_rgb = cv2.cvtColor(player_crop, cv2.COLOR_BGR2RGB)
+        
+        # Pose detection
+        results = self.pose.process(player_rgb)
+        
+        # Landmark'ları ana frame üzerine çiz
+        if results.pose_landmarks:
+            crop_h, crop_w = player_crop.shape[:2]
+            
+            # Landmark'ları crop koordinatlarından global koordinatlara dönüştür
+            # MediaPipe'ın NormalizedLandmarkList formatını kullan
+            from mediapipe.framework.formats import landmark_pb2
+            
+            adjusted_landmarks = landmark_pb2.NormalizedLandmarkList()
+            for landmark in results.pose_landmarks.landmark:
+                new_landmark = adjusted_landmarks.landmark.add()
+                new_landmark.x = (landmark.x * crop_w + x1) / frame.shape[1]
+                new_landmark.y = (landmark.y * crop_h + y1) / frame.shape[0]
+                new_landmark.z = landmark.z
+                new_landmark.visibility = landmark.visibility
+            
+            # İskelet çizimi (global koordinatlarda)
+            self.mp_drawing.draw_landmarks(
+                frame,
+                adjusted_landmarks,
+                self.mp_pose.POSE_CONNECTIONS,
+                landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style(),
+                connection_drawing_spec=mp.solutions.drawing_utils.DrawingSpec(
+                    color=(0, 255, 0),  # Yeşil çizgiler
+                    thickness=2,
+                    circle_radius=2
+                )
+            )
+            
+            # Önemli noktaları vurgula (bilekler, dirsekler, omuzlar)
+            key_points = {
+                'sol_bilek': self.mp_pose.PoseLandmark.LEFT_WRIST,
+                'sağ_bilek': self.mp_pose.PoseLandmark.RIGHT_WRIST,
+                'sol_dirsek': self.mp_pose.PoseLandmark.LEFT_ELBOW,
+                'sağ_dirsek': self.mp_pose.PoseLandmark.RIGHT_ELBOW,
+                'sol_omuz': self.mp_pose.PoseLandmark.LEFT_SHOULDER,
+                'sağ_omuz': self.mp_pose.PoseLandmark.RIGHT_SHOULDER,
+            }
+            
+            for name, landmark_id in key_points.items():
+                landmark = results.pose_landmarks.landmark[landmark_id.value]
+                if landmark.visibility > 0.5:
+                    # Crop koordinatlarından global koordinatlara dönüştür
+                    global_x = int(landmark.x * crop_w + x1)
+                    global_y = int(landmark.y * crop_h + y1)
+                    cv2.circle(frame, (global_x, global_y), 6, (0, 0, 255), -1)
+        
+        return results
+    
     # ------------------------ RUN ------------------------
     def run(self):
         # Tam ekran pencere oluştur
@@ -108,10 +202,7 @@ class ShotDetector:
             self.fps = 1.0 / (now - self.prev_time) if self.prev_time else 0.0
             self.prev_time = now
 
-            # Pose Estimation
-
-            #self.pose(self.frame)
-
+            # Frame'i resize et
             self.frame = cv2.resize(self.frame, (int(self.frame.shape[1] * scale), int(self.frame.shape[0] * scale)))
 
 
@@ -205,6 +296,10 @@ class ShotDetector:
                 # Tespit edilen oyuncuları kaydet
                 self.detected_players.add(track_id)
 
+                # --- POSE ESTIMATION (oyuncu bazlı) ---
+                if self.show_pose:
+                    self.estimate_pose_for_player(self.frame, (l, t, w, h))
+
                 cv2.circle(self.frame, (cx, cy), 5, (0, 255, 255), -1)
                 cv2.putText(self.frame, f"P{track_id}", (int(l), int(t) - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
@@ -255,6 +350,11 @@ class ShotDetector:
             minimap_status = "Minimap: ON (M)" if self.show_minimap else "Minimap: OFF (M)"
             cv2.putText(self.frame, minimap_status, (20, self.frame.shape[0] - 50), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            
+            # Pose durumu göster (sol alt, Minimap'in üstünde)
+            pose_status = "Pose: ON (P)" if self.show_pose else "Pose: OFF (P)"
+            cv2.putText(self.frame, pose_status, (20, self.frame.shape[0] - 80), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
             self.frame_count += 1
             cv2.imshow("Basketball Tracker", self.frame)
@@ -267,8 +367,16 @@ class ShotDetector:
                 self.show_minimap = not self.show_minimap
                 status = "AÇIK" if self.show_minimap else "KAPALI"
                 print(f"🗺️  Minimap: {status}")
+            elif key == ord('p') or key == ord('P'):  # P tuşu - Pose toggle
+                self.show_pose = not self.show_pose
+                status = "AÇIK" if self.show_pose else "KAPALI"
+                print(f"🧍 Pose Estimation: {status}")
+        
+        # Kaynakları temizle
         self.cap.release()
         cv2.destroyAllWindows()
+        self.pose.close()
+        print("✓ Kaynaklar temizlendi")
 
     # ------------------------ SCOREBOARD (PIL) ------------------------
     def draw_scoreboard(self):
