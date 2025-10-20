@@ -55,7 +55,7 @@ class ShotDetector:
         self.mp_drawing_styles = mp.solutions.drawing_styles
         self.pose = self.mp_pose.Pose(
             static_image_mode=False,
-            model_complexity=1,  # 0, 1, veya 2 (2 en yüksek doğruluk ama yavaş)
+            model_complexity=1,
             smooth_landmarks=True,
             enable_segmentation=False,
             min_detection_confidence=0.5,
@@ -72,7 +72,7 @@ class ShotDetector:
         )
 
         # --- VIDEO / MINIMAP ---
-        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training2.mp4")
+        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training7.mp4")
         self.minimap_img = cv2.imread(r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\images\hom.png")
         self.frame_count = 0
         self.frame = None
@@ -111,78 +111,108 @@ class ShotDetector:
         self.run()
 
     # ------------------------ POSE ESTIMATION ------------------------
-    def estimate_pose_for_player(self, frame, bbox):
-        """
-        Bir oyuncu bounding box'ı için pose estimation yapar
-        bbox: (left, top, width, height)
-        """
+    def get_player_color_theme(self, player_id):
+        """Oyuncu ID'sine göre renk teması döndür"""
+        color_themes = {
+            1: {
+                'primary': (255, 100, 50),
+                'secondary': (255, 150, 100),
+                'glow': (255, 200, 150),
+                'name': 'PHOENIX'
+            },
+            2: {
+                'primary': (50, 150, 255),
+                'secondary': (100, 180, 255),
+                'glow': (150, 200, 255),
+                'name': 'FROST'
+            }
+        }
+        default = {
+            'primary': (100, 255, 100),
+            'secondary': (150, 255, 150),
+            'glow': (200, 255, 200),
+            'name': 'EMERALD'
+        }
+        return color_themes.get(player_id, default)
+    
+    def draw_smooth_line(self, frame, pt1, pt2, color, thickness=1, glow=False):
+        """Glow efektli smooth çizgi çizer"""
+        if glow:
+            glow_color = tuple(min(255, int(c * 1.15)) for c in color)
+            cv2.line(frame, pt1, pt2, glow_color, thickness + 1, cv2.LINE_AA)
+        cv2.line(frame, pt1, pt2, color, thickness, cv2.LINE_AA)
+    
+    def estimate_pose_for_player(self, frame, bbox, player_id=1):
+        """Oyuncu için pose estimation - MINIMAL UI"""
         l, t, w, h = bbox
-        
-        # Bounding box'ı biraz genişlet (padding ekle)
         padding = 20
         x1 = max(0, int(l) - padding)
         y1 = max(0, int(t) - padding)
         x2 = min(frame.shape[1], int(l + w) + padding)
         y2 = min(frame.shape[0], int(t + h) + padding)
         
-        # Oyuncu crop'u
         player_crop = frame[y1:y2, x1:x2]
-        
         if player_crop.size == 0:
             return None
         
-        # BGR to RGB
         player_rgb = cv2.cvtColor(player_crop, cv2.COLOR_BGR2RGB)
-        
-        # Pose detection
         results = self.pose.process(player_rgb)
+        theme = self.get_player_color_theme(player_id)
         
-        # Landmark'ları ana frame üzerine çiz
         if results.pose_landmarks:
             crop_h, crop_w = player_crop.shape[:2]
-            
-            # Landmark'ları crop koordinatlarından global koordinatlara dönüştür
-            # MediaPipe'ın NormalizedLandmarkList formatını kullan
-            from mediapipe.framework.formats import landmark_pb2
-            
-            adjusted_landmarks = landmark_pb2.NormalizedLandmarkList()
+            landmarks_global = []
             for landmark in results.pose_landmarks.landmark:
-                new_landmark = adjusted_landmarks.landmark.add()
-                new_landmark.x = (landmark.x * crop_w + x1) / frame.shape[1]
-                new_landmark.y = (landmark.y * crop_h + y1) / frame.shape[0]
-                new_landmark.z = landmark.z
-                new_landmark.visibility = landmark.visibility
+                global_x = int(landmark.x * crop_w + x1)
+                global_y = int(landmark.y * crop_h + y1)
+                landmarks_global.append({
+                    'x': global_x,
+                    'y': global_y,
+                    'visibility': landmark.visibility
+                })
             
-            # İskelet çizimi (global koordinatlarda)
-            self.mp_drawing.draw_landmarks(
-                frame,
-                adjusted_landmarks,
-                self.mp_pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style(),
-                connection_drawing_spec=mp.solutions.drawing_utils.DrawingSpec(
-                    color=(0, 255, 0),  # Yeşil çizgiler
-                    thickness=2,
-                    circle_radius=2
-                )
-            )
+            # İskelet bağlantıları
+            connections = [
+                (11, 12), (11, 23), (12, 24), (23, 24),
+                (11, 13), (13, 15), (15, 17), (15, 19), (15, 21),
+                (12, 14), (14, 16), (16, 18), (16, 20), (16, 22),
+                (23, 25), (25, 27), (27, 29), (27, 31),
+                (24, 26), (26, 28), (28, 30), (28, 32),
+                (0, 1), (1, 2), (2, 3), (3, 7), (0, 4), (4, 5), (5, 6), (6, 8), (9, 10)
+            ]
             
-            # Önemli noktaları vurgula (bilekler, dirsekler, omuzlar)
-            key_points = {
-                'sol_bilek': self.mp_pose.PoseLandmark.LEFT_WRIST,
-                'sağ_bilek': self.mp_pose.PoseLandmark.RIGHT_WRIST,
-                'sol_dirsek': self.mp_pose.PoseLandmark.LEFT_ELBOW,
-                'sağ_dirsek': self.mp_pose.PoseLandmark.RIGHT_ELBOW,
-                'sol_omuz': self.mp_pose.PoseLandmark.LEFT_SHOULDER,
-                'sağ_omuz': self.mp_pose.PoseLandmark.RIGHT_SHOULDER,
-            }
+            for connection in connections:
+                start_idx, end_idx = connection
+                if start_idx < len(landmarks_global) and end_idx < len(landmarks_global):
+                    start = landmarks_global[start_idx]
+                    end = landmarks_global[end_idx]
+                    if start['visibility'] > 0.5 and end['visibility'] > 0.5:
+                        pt1 = (start['x'], start['y'])
+                        pt2 = (end['x'], end['y'])
+                        if connection in [(11, 12), (11, 23), (12, 24), (23, 24)]:
+                            self.draw_smooth_line(frame, pt1, pt2, theme['primary'], thickness=2, glow=False)
+                        elif connection[0] < 11:
+                            cv2.line(frame, pt1, pt2, theme['secondary'], 1, cv2.LINE_AA)
+                        else:
+                            self.draw_smooth_line(frame, pt1, pt2, theme['primary'], thickness=1, glow=False)
             
-            for name, landmark_id in key_points.items():
-                landmark = results.pose_landmarks.landmark[landmark_id.value]
-                if landmark.visibility > 0.5:
-                    # Crop koordinatlarından global koordinatlara dönüştür
-                    global_x = int(landmark.x * crop_w + x1)
-                    global_y = int(landmark.y * crop_h + y1)
-                    cv2.circle(frame, (global_x, global_y), 6, (0, 0, 255), -1)
+            # Landmark'lar
+            for idx, landmark in enumerate(landmarks_global):
+                if landmark['visibility'] > 0.5:
+                    x, y = landmark['x'], landmark['y']
+                    if idx in [11, 12, 13, 14, 15, 16, 23, 24, 25, 26]:
+                        cv2.circle(frame, (x, y), 3, theme['secondary'], -1, cv2.LINE_AA)
+                        cv2.circle(frame, (x, y), 1, theme['primary'], -1, cv2.LINE_AA)
+            
+            # Confidence bar
+            avg_confidence = np.mean([lm['visibility'] for lm in landmarks_global])
+            conf_x = int(l + w/2 - 15)
+            conf_y = int(t - 18)
+            bar_width, bar_height = 30, 3
+            fill_width = int(bar_width * avg_confidence)
+            bar_color = (100, 255, 100) if avg_confidence > 0.7 else (100, 200, 255) if avg_confidence > 0.5 else (100, 100, 255)
+            cv2.rectangle(frame, (conf_x, conf_y), (conf_x + bar_width, conf_y + bar_height), (0, 0, 0), -1, cv2.LINE_AA)
+            cv2.rectangle(frame, (conf_x, conf_y), (conf_x + fill_width, conf_y + bar_height), bar_color, -1, cv2.LINE_AA)
         
         return results
     
@@ -202,7 +232,10 @@ class ShotDetector:
             self.fps = 1.0 / (now - self.prev_time) if self.prev_time else 0.0
             self.prev_time = now
 
-            # Frame'i resize et
+            # Pose Estimation
+
+            #self.pose(self.frame)
+
             self.frame = cv2.resize(self.frame, (int(self.frame.shape[1] * scale), int(self.frame.shape[0] * scale)))
 
 
@@ -298,11 +331,25 @@ class ShotDetector:
 
                 # --- POSE ESTIMATION (oyuncu bazlı) ---
                 if self.show_pose:
-                    self.estimate_pose_for_player(self.frame, (l, t, w, h))
+                    self.estimate_pose_for_player(self.frame, (l, t, w, h), track_id)
 
-                cv2.circle(self.frame, (cx, cy), 5, (0, 255, 255), -1)
-                cv2.putText(self.frame, f"P{track_id}", (int(l), int(t) - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+                # Oyuncu renk teması al
+                theme = self.get_player_color_theme(track_id)
+                
+                # Oyuncu merkez noktası (kompakt)
+                cv2.circle(self.frame, (cx, cy), 5, theme['glow'], -1, cv2.LINE_AA)
+                cv2.circle(self.frame, (cx, cy), 3, theme['primary'], -1, cv2.LINE_AA)
+                
+                # Oyuncu etiketi (geliştirilmiş)
+                label = f"P{track_id}"
+                label_x, label_y = int(l), int(t) - 10
+                
+                # Gölge efekti
+                cv2.putText(self.frame, label, (label_x + 1, label_y + 1),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
+                # Ana metin (oyuncu renginde)
+                cv2.putText(self.frame, label, (label_x, label_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, theme['primary'], 1, cv2.LINE_AA)
 
             # --- BALL & HOOP CLEANING + SHOT DETECTION ---
             self.clean_motion()
@@ -336,25 +383,29 @@ class ShotDetector:
                              (x_offset+minimap_width+2, y_offset+minimap_height+2), 
                              (255, 255, 255), 2)
 
-            # --- SCORE OVERLAY --- (shot_detector modülünden)
+            # --- SCORE OVERLAY --- (shot_detector modülünden) - Geliştirilmiş
             if self.shot_detector.fade_counter > 0:
-                cv2.putText(self.frame, self.shot_detector.overlay_text, (50,100),
-                            cv2.FONT_HERSHEY_SIMPLEX, 2, self.shot_detector.overlay_color, 4)
+                text = self.shot_detector.overlay_text
+                color = self.shot_detector.overlay_color
+                
+                # Metin pozisyonu (ortalanmış, üstte)
+                text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 2.0, 4)[0]
+                text_x = (self.frame.shape[1] - text_size[0]) // 2
+                text_y = 100
+                
+                # Glow efekti (3 katman)
+                cv2.putText(self.frame, text, (text_x + 3, text_y + 3),
+                           cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 0, 0), 6, cv2.LINE_AA)  # Gölge
+                cv2.putText(self.frame, text, (text_x + 1, text_y + 1),
+                           cv2.FONT_HERSHEY_SIMPLEX, 2.0, tuple(int(c*0.7) for c in color), 4, cv2.LINE_AA)  # Glow
+                cv2.putText(self.frame, text, (text_x, text_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 2.0, color, 3, cv2.LINE_AA)  # Ana metin
             
             # --- SCOREBOARD --- (Dijital basketbol scoreboard)
             self.draw_scoreboard()
 
-            cv2.putText(self.frame, f"FPS: {int(self.fps)}", (20, self.frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
-            
-            # Minimap durumu göster (sol alt, FPS'in üstünde)
-            minimap_status = "Minimap: ON (M)" if self.show_minimap else "Minimap: OFF (M)"
-            cv2.putText(self.frame, minimap_status, (20, self.frame.shape[0] - 50), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            
-            # Pose durumu göster (sol alt, Minimap'in üstünde)
-            pose_status = "Pose: ON (P)" if self.show_pose else "Pose: OFF (P)"
-            cv2.putText(self.frame, pose_status, (20, self.frame.shape[0] - 80), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            # --- MODERN UI PANEL (Sol Alt) ---
+            self.draw_status_panel()
 
             self.frame_count += 1
             cv2.imshow("Basketball Tracker", self.frame)
@@ -378,6 +429,89 @@ class ShotDetector:
         self.pose.close()
         print("✓ Kaynaklar temizlendi")
 
+    # ------------------------ STATUS PANEL ------------------------
+    def draw_status_panel(self):
+        """Modern durum paneli - FPS, Minimap, Pose durumları"""
+        panel_x = 15
+        panel_y = self.frame.shape[0] - 110
+        panel_width = 250
+        panel_height = 95
+        
+        # Arka plan (yarı saydam siyah panel)
+        overlay = self.frame.copy()
+        
+        # Gradient arka plan
+        for i in range(panel_height):
+            alpha_gradient = 0.7 - (i / panel_height) * 0.2
+            color_val = int(20 + (i / panel_height) * 10)
+            cv2.rectangle(overlay, 
+                         (panel_x, panel_y + i), 
+                         (panel_x + panel_width, panel_y + i + 1),
+                         (color_val, color_val, color_val), -1)
+        
+        # Blend
+        cv2.addWeighted(overlay, 0.8, self.frame, 0.2, 0, self.frame)
+        
+        # Çerçeve
+        cv2.rectangle(self.frame, (panel_x, panel_y), 
+                     (panel_x + panel_width, panel_y + panel_height),
+                     (100, 100, 100), 2, cv2.LINE_AA)
+        cv2.rectangle(self.frame, (panel_x + 2, panel_y + 2), 
+                     (panel_x + panel_width - 2, panel_y + panel_height - 2),
+                     (60, 60, 60), 1, cv2.LINE_AA)
+        
+        # Başlık
+        cv2.putText(self.frame, "SYSTEM STATUS", (panel_x + 10, panel_y + 20),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+        
+        # Ayırıcı çizgi
+        cv2.line(self.frame, (panel_x + 10, panel_y + 28), 
+                (panel_x + panel_width - 10, panel_y + 28),
+                (80, 80, 80), 1, cv2.LINE_AA)
+        
+        # FPS
+        fps_text = f"FPS: {int(self.fps)}"
+        fps_color = (100, 255, 100) if self.fps >= 20 else (100, 200, 255) if self.fps >= 15 else (100, 100, 255)
+        cv2.putText(self.frame, fps_text, (panel_x + 15, panel_y + 48),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, fps_color, 2, cv2.LINE_AA)
+        
+        # FPS bar
+        bar_x = panel_x + 90
+        bar_y = panel_y + 38
+        bar_width = 140
+        bar_height = 12
+        
+        cv2.rectangle(self.frame, (bar_x, bar_y), (bar_x + bar_width, bar_y + bar_height),
+                     (40, 40, 40), -1, cv2.LINE_AA)
+        
+        fill_width = int(min(1.0, self.fps / 30) * bar_width)
+        cv2.rectangle(self.frame, (bar_x, bar_y), (bar_x + fill_width, bar_y + bar_height),
+                     fps_color, -1, cv2.LINE_AA)
+        
+        # Minimap durumu
+        minimap_text = "Minimap"
+        minimap_status = "ON" if self.show_minimap else "OFF"
+        minimap_color = (100, 255, 100) if self.show_minimap else (150, 150, 150)
+        
+        cv2.putText(self.frame, minimap_text, (panel_x + 15, panel_y + 68),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(self.frame, minimap_status, (panel_x + 110, panel_y + 68),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, minimap_color, 2, cv2.LINE_AA)
+        cv2.putText(self.frame, "[M]", (panel_x + 195, panel_y + 68),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1, cv2.LINE_AA)
+        
+        # Pose durumu
+        pose_text = "Pose Est."
+        pose_status = "ON" if self.show_pose else "OFF"
+        pose_color = (100, 255, 255) if self.show_pose else (150, 150, 150)
+        
+        cv2.putText(self.frame, pose_text, (panel_x + 15, panel_y + 88),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(self.frame, pose_status, (panel_x + 110, panel_y + 88),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, pose_color, 2, cv2.LINE_AA)
+        cv2.putText(self.frame, "[P]", (panel_x + 195, panel_y + 88),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.4, (150, 150, 150), 1, cv2.LINE_AA)
+    
     # ------------------------ SCOREBOARD (PIL) ------------------------
     def draw_scoreboard(self):
         """Modern estetik scoreboard - PIL ile"""
@@ -546,11 +680,24 @@ class ShotDetector:
     # ------------------------ CLEAN / DETECT ------------------------
     def clean_motion(self):
         self.ball_pos = clean_ball_pos(self.ball_pos, self.frame_count)
-        for b in self.ball_pos:
-            cv2.circle(self.frame, b[0], 2, (255,0,255), 2)
-            if len(self.hoop_pos) > 1:
-                self.hoop_pos = clean_hoop_pos(self.hoop_pos)
-                cv2.circle(self.frame, self.hoop_pos[-1][0], 2, (0, 128, 0), 2)
+        
+        # Top pozisyonlarını çiz (kompakt)
+        for i, b in enumerate(self.ball_pos):
+            # Eski pozisyonlar daha soluk
+            alpha = (i + 1) / len(self.ball_pos)
+            
+            # Glow efekti (küçültülmüş)
+            cv2.circle(self.frame, b[0], 5, (255, 100, 255), -1, cv2.LINE_AA)
+            cv2.circle(self.frame, b[0], 3, (255, 0, 255), -1, cv2.LINE_AA)
+            
+        # Pota pozisyonunu çiz (kompakt)
+        if len(self.hoop_pos) > 1:
+            self.hoop_pos = clean_hoop_pos(self.hoop_pos)
+            hoop_center = self.hoop_pos[-1][0]
+            
+            # Pota çemberi (küçültülmüş)
+            cv2.circle(self.frame, hoop_center, 6, (100, 255, 100), -1, cv2.LINE_AA)
+            cv2.circle(self.frame, hoop_center, 4, (0, 255, 0), -1, cv2.LINE_AA)
 
     def shot_detection(self, players=[]):
 
