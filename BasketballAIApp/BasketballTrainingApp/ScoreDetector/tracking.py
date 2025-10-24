@@ -1,5 +1,8 @@
 # shot_detector_deepsort.py
 
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 from ultralytics import YOLO
 import cv2
 import cvzone
@@ -8,11 +11,10 @@ import time
 from PIL import Image, ImageDraw, ImageFont
 
 
-
 from utilsfixed import in_hoop_region, clean_hoop_pos, clean_ball_pos, get_device
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import pointSelection as ps
-from BasketballAIApp.BasketballTrainingApp.ScoreDetector import homography as h
+import homography as h
 import draw_minimap as dm
 from shot_detector import ShotDetectorModule
 
@@ -30,17 +32,13 @@ scale = 0.5  # video resize
 class ShotDetector:
     def __init__(self):
 
-        while True:
-            try:
-                num_players = int(input("Kaç oyuncu var? (1 veya 2): "))
-                if num_players in [1, 2]:
-                    self.num_players = num_players
-                    print(f"✓ {num_players} oyuncu seçildi!")
-                    break
-                else:
-                    print("❌ Lütfen 1 veya 2 girin!")
-            except ValueError:
-                print("❌ Lütfen geçerli bir sayı girin!")
+        # Otomatik oyuncu sayısı tespiti
+        self.num_players = 0  # Başlangıçta 0, tespit edildikçe güncellenecek
+        self.players_detected = False  # Oyuncu sayısı tespit edildi mi?
+        self.max_players_seen = 0  # Şimdiye kadar görülen maksimum oyuncu sayısı
+        self.detection_frames = 0  # Tespit frame sayısı
+        self.detection_threshold = 5  # Kaç frame sonra karar verilecek
+        print("🔍 Oyuncu sayısı otomatik tespit edilecek...")
         print("="*50 + "\n")
         
         # --- YOLO MODELLERİ ---
@@ -57,7 +55,7 @@ class ShotDetector:
         )
 
         # --- VIDEO / MINIMAP ---
-        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training7.mp4")
+        self.cap = cv2.VideoCapture(r"D:\repos\Basketball_App\BasketballAIApp\clips\training2.mp4")
         self.minimap_img = cv2.imread(r"D:\repos\Basketball_App\BasketballAIApp\BasketballTrainingApp\images\hom.png")
         self.frame_count = 0
         self.frame = None
@@ -204,7 +202,32 @@ class ShotDetector:
                 
                 # Tespit edilen oyuncuları kaydet
                 self.detected_players.add(track_id)
-
+            
+            # Otomatik oyuncu sayısı güncelleme (birkaç frame boyunca maksimum sayıyı takip et)
+            if not self.players_detected:
+                current_player_count = len(players)
+                self.detection_frames += 1
+                
+                # Maksimum oyuncu sayısını güncelle
+                if current_player_count > self.max_players_seen:
+                    self.max_players_seen = current_player_count
+                    print(f"🔍 Yeni maksimum oyuncu sayısı: {self.max_players_seen}")
+                
+                # Belirli frame sayısından sonra karar ver
+                if self.detection_frames >= self.detection_threshold and self.max_players_seen > 0:
+                    self.num_players = self.max_players_seen
+                    self.players_detected = True
+                    print(f"🎯 Final oyuncu sayısı: {self.num_players} (sabit)")
+                    print(f"📊 {self.detection_frames} frame boyunca tespit edildi")
+            
+            # Oyuncuları çiz
+            for track in tracks:
+                if not track.is_confirmed():
+                    continue
+                track_id = track.track_id
+                l, t, w, h = track.to_ltwh()
+                cx, cy = int(l + w/2), int(t + h)
+                
                 cv2.circle(self.frame, (cx, cy), 5, (0, 255, 255), -1)
                 cv2.putText(self.frame, f"P{track_id}", (int(l), int(t) - 10),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
@@ -251,9 +274,18 @@ class ShotDetector:
 
             cv2.putText(self.frame, f"FPS: {int(self.fps)}", (20, self.frame.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
             
-            # Minimap durumu göster (sol alt, FPS'in üstünde)
+            # Oyuncu sayısını göster
+            if self.players_detected:
+                cv2.putText(self.frame, f"Oyuncular: {self.num_players} (sabit)", (20, self.frame.shape[0] - 50), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            else:
+                progress = min(100, (self.detection_frames / self.detection_threshold) * 100)
+                cv2.putText(self.frame, f"Oyuncular: {self.max_players_seen} (tespit: {progress:.0f}%)", 
+                           (20, self.frame.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+            
+            # Minimap durumu göster (sol alt, oyuncu sayısının üstünde)
             minimap_status = "Minimap: ON (M)" if self.show_minimap else "Minimap: OFF (M)"
-            cv2.putText(self.frame, minimap_status, (20, self.frame.shape[0] - 50), 
+            cv2.putText(self.frame, minimap_status, (20, self.frame.shape[0] - 80), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             self.frame_count += 1
@@ -339,6 +371,8 @@ class ShotDetector:
         sorted_players = sorted(all_players.items(), key=lambda x: x[1]['points'], reverse=True)[:self.num_players]
         
         # Oyuncuları çiz
+        if self.num_players == 0 or len(sorted_players) == 0:
+            return  # Oyuncu yoksa skor tablosunu çizme
         player_width = board_width // self.num_players
         
         for idx, (player_id, stats) in enumerate(sorted_players):
