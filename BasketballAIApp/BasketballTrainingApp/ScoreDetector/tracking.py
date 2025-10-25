@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 from utilsfixed import in_hoop_region, clean_hoop_pos, clean_ball_pos, get_device
 from deep_sort_realtime.deepsort_tracker import DeepSort
 import pointSelection as ps
-from BasketballAIApp.BasketballTrainingApp.ScoreDetector import homography as h
+import homography as h
 import draw_minimap as dm
 from shot_detector import ShotDetectorModule
 
@@ -44,8 +44,8 @@ class ShotDetector:
         print("="*50 + "\n")
         
         # --- YOLO MODELLERİ ---
-        self.model_ball = YOLO("D://repos//Basketball_App//BasketballAIApp//Trainings//kagglebest.pt")
-        self.model_player = YOLO(r"D:\repos\Basketball_App\BasketballAIApp\Models\yolov8s.pt")  # person detection
+        self.model_ball = YOLO("D://repos//Basketball_App//BasketballAIApp//Trainings//kagglebest.engine",task="detect")
+        self.model_player = YOLO(r"D:\repos\Basketball_App\BasketballAIApp\Models\yolov8s.engine",task='detect')  # person detection
         self.device = get_device()
 
         # --- DeepSORT Tracker ---
@@ -119,7 +119,7 @@ class ShotDetector:
 
             # --- HOOP DETECTION (sadece bir kez) ---
             if not self.hoop_detected:
-                results_ball = self.model_ball(self.frame, stream=True, device=self.device)
+                results_ball = self.model_ball(self.frame, device=self.device,verbose=False)
                 for r in results_ball:
                     for box in r.boxes:
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -150,7 +150,7 @@ class ShotDetector:
                                 print(f"✓ Pota tespit edildi ve sabitlend: {avg_cx}, {avg_cy} (w={avg_w}, h={avg_h})")
             else:
                 # --- BALL DETECTION ONLY (pota zaten tespit edildi) ---
-                results_ball = self.model_ball(self.frame, stream=True, device=self.device)
+                results_ball = self.model_ball(self.frame,device=self.device,verbose=False)
                 for r in results_ball:
                     for box in r.boxes:
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
@@ -176,7 +176,7 @@ class ShotDetector:
                 cvzone.cornerRect(self.frame, (hx - hw//2, hy - hh//2, hw, hh), colorC=(0, 255, 0))
 
             # --- PLAYER DETECTION + DEEPSORT TRACKING ---
-            results_player = self.model_player(self.frame, device=self.device, conf=0.6)[0]
+            results_player = self.model_player.predict(self.frame, conf=0.6, verbose=False)[0]
             CONF_THRESHOLD = 0.65
 
             detections = []
