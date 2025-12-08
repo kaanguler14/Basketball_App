@@ -167,12 +167,14 @@ def clean_ball_pos(ball_pos, frame_count):
         elif (w2 * 1.4 < h2) or (h2 * 1.4 < w2):
             ball_pos.pop()
 
-    # Remove old points - limit iterations to avoid performance issues
-    removed = 0
-    max_remove = 10  # Prevent excessive removals in one call
-    while len(ball_pos) > 0 and (frame_count - ball_pos[0][1] > 30) and removed < max_remove:
+    # Remove old points + enforce hard limit
+    # Eski noktaları temizle
+    while len(ball_pos) > 0 and (frame_count - ball_pos[0][1] > 30):
         ball_pos.pop(0)
-        removed += 1
+    
+    # HARD LIMIT: Max 50 nokta (memory leak önleme)
+    while len(ball_pos) > 50:
+        ball_pos.pop(0)
 
     return ball_pos
 
@@ -199,11 +201,8 @@ def clean_hoop_pos(hoop_pos):
         if len(hoop_pos) > 1 and ((w2 * 1.3 < h2) or (h2 * 1.3 < w2)):
             hoop_pos.pop()
 
-    # Cap history length - limit iterations
-    removed = 0
-    max_remove = 5
-    while len(hoop_pos) > 25 and removed < max_remove:
+    # Cap history length - HARD LIMIT
+    while len(hoop_pos) > 25:
         hoop_pos.pop(0)
-        removed += 1
 
     return hoop_pos

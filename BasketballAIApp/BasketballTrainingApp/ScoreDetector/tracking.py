@@ -13,6 +13,8 @@ from collections import deque
 import logging
 import threading
 from queue import Queue
+import gc
+import torch
 
 from utilsfixed import in_hoop_region, clean_hoop_pos, clean_ball_pos, get_device
 from deep_sort_realtime.deepsort_tracker import DeepSort
@@ -101,12 +103,14 @@ class ShotDetector:
         logger.info(f"✓ Device: {self.device}, Half Precision: {self.use_half}")
 
         # --- DeepSORT Tracker ---
+        # DeepSORT - OPTIMIZED: max_age düşürüldü (memory leak önleme)
         self.deepsort = DeepSort(
-            max_age=60,
+            max_age=15,  # 60 -> 15 (eski track'ler daha hızlı silinir)
             n_init=2,
             nms_max_overlap=1.0,
             max_cosine_distance=0.3
         )
+        self.deepsort_reset_interval = 500  # Her 500 frame'de tracker reset
 
         # --- ASYNC VIDEO CAPTURE ---
         video_path = r"D:\repos\Basketball_App\BasketballAIApp\clips\training7.mp4"
@@ -137,6 +141,7 @@ class ShotDetector:
         # --- DETECTED PLAYERS ---
         self.detected_players = set()
         self.primary_player_id = None  # İlk tespit edilen oyuncu (tek oyuncu modunda sabit kalır)
+        self.MAX_DETECTED_PLAYERS = 10  # Memory limit
 
         # --- SCOREBOARD COLORS (OpenCV BGR) ---
         self.colors = {
@@ -180,7 +185,7 @@ class ShotDetector:
                 self.fps = sum(self.fps_history) / len(self.fps_history)
             self.prev_time = now
 
-            # Resize (pre-calculate dimensions for speed)
+            # Resize
             new_w = int(self.frame.shape[1] * scale)
             new_h = int(self.frame.shape[0] * scale)
             self.frame = cv2.resize(self.frame, (new_w, new_h))
@@ -204,7 +209,7 @@ class ShotDetector:
                 cv2.putText(self.frame, self.shot_detector.overlay_text, (50,100),
                             cv2.FONT_HERSHEY_SIMPLEX, 2, self.shot_detector.overlay_color, 4)
             
-            # --- SCOREBOARD (OpenCV - no PIL) ---
+            # --- SCOREBOARD ---
             self._draw_scoreboard_opencv()
 
             # --- FPS Display ---
@@ -216,6 +221,23 @@ class ShotDetector:
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             self.frame_count += 1
+            
+            # MEMORY CLEANUP: Her 100 frame'de bir temizlik yap
+            if self.frame_count % 100 == 0:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            
+            # DEEPSORT RESET: Her 500 frame'de tracker'ı sıfırla (memory leak önleme)
+            if self.frame_count % self.deepsort_reset_interval == 0 and self.frame_count > 0:
+                self.deepsort = DeepSort(
+                    max_age=15,
+                    n_init=2,
+                    nms_max_overlap=1.0,
+                    max_cosine_distance=0.3
+                )
+                logger.info(f"🔄 DeepSORT reset (Frame {self.frame_count})")
+            
             cv2.imshow("Basketball Tracker", self.frame)
             
             key = cv2.waitKey(1) & 0xFF
@@ -336,7 +358,9 @@ class ShotDetector:
             
             players.append((cx, cy, track_id))
             
-            self.detected_players.add(track_id)
+            # Memory limit: Max 10 oyuncu ID'si tut
+            if len(self.detected_players) < self.MAX_DETECTED_PLAYERS:
+                self.detected_players.add(track_id)
 
             cv2.circle(self.frame, (cx, cy), 5, (0, 255, 255), -1)
             cv2.putText(self.frame, f"P{track_id}", (int(l), int(t) - 10),
