@@ -1,8 +1,15 @@
 # utils_fixed.py
+# OPTIMIZED VERSION: Print statements removed, performance improved
+
 import math
 import numpy as np
 import torch
 import cv2
+import logging
+
+# Logging konfigürasyonu
+logger = logging.getLogger(__name__)
+
 
 def get_device():
     """Automatically select devices"""
@@ -29,45 +36,39 @@ def score(ball_pos, hoop_pos):
     hoop_w = hoop_pos[-1][2]
     hoop_h = hoop_pos[-1][3]
 
-    rim_height = hoop_cy - 0.5 * hoop_h  # y coordinate (image coords: larger y -> lower)
+    rim_height = hoop_cy - 0.5 * hoop_h
 
     # Find a pair of consecutive points where first is above rim and next is below/around rim
     x_pts = []
     y_pts = []
-    idx_found = None
-    # iterate from newest-1 down to 0 (so we get the most recent crossing)
+    
     for i in range(len(ball_pos) - 2, -1, -1):
         y_above = ball_pos[i][0][1]
         y_next = ball_pos[i + 1][0][1]
         if y_above < rim_height and y_next >= rim_height:
             x_pts = [ball_pos[i][0][0], ball_pos[i + 1][0][0]]
             y_pts = [y_above, y_next]
-            idx_found = i
             break
 
-    # If we didn't find consecutive above->below sample last two points (fallback)
+    # Fallback: try last two points
     if len(x_pts) < 2:
-        # try last two points if they are distinct
         try:
             x_pts = [ball_pos[-2][0][0], ball_pos[-1][0][0]]
             y_pts = [ball_pos[-2][0][1], ball_pos[-1][0][1]]
         except Exception:
             return False
 
-    # If still not enough, bail out
     if len(x_pts) < 2:
         return False
 
-    # Try linear fit (x as independent variable for y = m*x + b)
+    # Try linear fit
     try:
-        # fit y = m*x + b -> np.polyfit(x,y,1) returns [m,b] if we pass x,y
         m, b = np.polyfit(x_pts, y_pts, 1)
     except Exception:
         return False
 
-    # avoid division by zero (nearly vertical/horizontal)
+    # avoid division by zero
     if abs(m) < 1e-6:
-        # fallback: check if any recent ball center entered rim box
         rim_x1 = hoop_cx - 0.5 * hoop_w
         rim_x2 = hoop_cx + 0.5 * hoop_w
         rim_y1 = hoop_cy - 0.5 * hoop_h
@@ -77,19 +78,16 @@ def score(ball_pos, hoop_pos):
                 return True
         return False
 
-    # predicted x where y == rim_height -> rim_height = m*x + b -> x = (rim_height - b) / m
     predicted_x = (rim_height - b) / m
 
     rim_x1 = hoop_cx - 0.5 * hoop_w
     rim_x2 = hoop_cx + 0.5 * hoop_w
-
-    # rebound / buffer zone
     hoop_rebound_zone = max(10, int(0.15 * hoop_w))
 
     if rim_x1 - hoop_rebound_zone <= predicted_x <= rim_x2 + hoop_rebound_zone:
         return True
 
-    # final fallback: check any recent ball centers inside rim bounding box
+    # final fallback
     for center, *_ in ball_pos[-15:]:
         if rim_x1 <= center[0] <= rim_x2 and (center[1] >= rim_height - hoop_rebound_zone and center[1] <= rim_height + hoop_rebound_zone):
             return True
@@ -121,8 +119,7 @@ def detect_up(ball_pos, hoop_pos):
     x1 = hoop_cx - 4.0 * hoop_w
     x2 = hoop_cx + 4.0 * hoop_w
     y1 = hoop_cy - 3.0 * hoop_h
-    y2 = hoop_cy - 1.10 * hoop_h  # not too close to rim center
-    #cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+    y2 = hoop_cy - 1.10 * hoop_h
 
     bx, by = ball_pos[-1][0]
     return (x1 < bx < x2) and (y1 < by < y2)
@@ -134,9 +131,6 @@ def in_hoop_region(center, hoop_pos):
         return False
     x, y = center
     hoop_cx, hoop_cy = hoop_pos[-1][0]
-    print("-----------------------")
-    print(f"hoop_pos: {hoop_pos}")
-    print("-****************-")
     hoop_w, hoop_h = hoop_pos[-1][2], hoop_pos[-1][3]
 
     x1 = hoop_cx - 1.5 * hoop_w
@@ -152,7 +146,10 @@ def clean_ball_pos(ball_pos, frame_count):
     Remove noisy/incorrect points and old points.
     - Pop last if it jumps too far from previous
     - Remove non-square detections
-    - Remove old points from the front (pop(0))
+    - Remove old points from the front
+    
+    NOTE: pop(0) is O(n). For better performance, consider using 
+    collections.deque with maxlen in the caller.
     """
     if len(ball_pos) > 1:
         w1, h1 = ball_pos[-2][2], ball_pos[-2][3]
@@ -165,24 +162,29 @@ def clean_ball_pos(ball_pos, frame_count):
         dist = math.hypot(x2 - x1, y2 - y1)
         max_dist = 4 * math.hypot(w1, h1)
 
-        # Ball should not move > max_dist within few frames
         if dist > max_dist and f_dif < 5:
-            ball_pos.pop()  # remove last noisy
-        # Ball shape should be roughly square-ish
+            ball_pos.pop()
         elif (w2 * 1.4 < h2) or (h2 * 1.4 < w2):
             ball_pos.pop()
 
-    # remove points older than threshold from front
+    # Remove old points + enforce hard limit
+    # Eski noktaları temizle
     while len(ball_pos) > 0 and (frame_count - ball_pos[0][1] > 30):
+        ball_pos.pop(0)
+    
+    # HARD LIMIT: Max 50 nokta (memory leak önleme)
+    while len(ball_pos) > 50:
         ball_pos.pop(0)
 
     return ball_pos
 
 
-
 def clean_hoop_pos(hoop_pos):
     """
     Remove hoop jumps, keep hoop history bounded.
+    
+    NOTE: pop(0) is O(n). For better performance, consider using 
+    collections.deque with maxlen in the caller.
     """
     if len(hoop_pos) > 1:
         x1, y1 = hoop_pos[-2][0][0], hoop_pos[-2][0][1]
@@ -196,14 +198,11 @@ def clean_hoop_pos(hoop_pos):
 
         if dist > max_dist and f_dif < 5:
             hoop_pos.pop()
-        if (w2 * 1.3 < h2) or (h2 * 1.3 < w2):
+        if len(hoop_pos) > 1 and ((w2 * 1.3 < h2) or (h2 * 1.3 < w2)):
             hoop_pos.pop()
 
-    # cap history length
+    # Cap history length - HARD LIMIT
     while len(hoop_pos) > 25:
         hoop_pos.pop(0)
 
     return hoop_pos
-
-
-

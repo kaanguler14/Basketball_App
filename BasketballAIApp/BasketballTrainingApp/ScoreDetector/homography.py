@@ -1,5 +1,5 @@
 import numpy as np
-from BasketballAIApp.BasketballTrainingApp.ScoreDetector import pointSelection as ps
+import pointSelection as ps
 import cv2
 
 def compute_homography(video_points_dict,minimap_points_dict):
