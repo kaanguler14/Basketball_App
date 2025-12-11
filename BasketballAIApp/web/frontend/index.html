@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🏀 Basketball Shot Analyzer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <!-- Animated Background -->
+    <div class="bg-pattern"></div>
+    <div class="court-lines"></div>
+    
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <span class="ball-icon">🏀</span>
+                <h1>SHOT ANALYZER</h1>
+            </div>
+            <p class="tagline">AI-Powered Basketball Analysis</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Upload Section -->
+            <section id="upload-section" class="card upload-card">
+                <div class="upload-area" id="drop-zone">
+                    <div class="upload-icon">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                    </div>
+                    <h2>Video Yükle</h2>
+                    <p>Sürükle & bırak veya tıklayarak seç</p>
+                    <span class="file-types">MP4, AVI, MOV, MKV</span>
+                    <input type="file" id="file-input" accept="video/*" hidden>
+                </div>
+                
+                <div class="file-selected" id="file-info" style="display: none;">
+                    <div class="file-icon">🎬</div>
+                    <div class="file-details">
+                        <span class="file-name" id="selected-file-name">video.mp4</span>
+                        <span class="file-size" id="selected-file-size">0 MB</span>
+                    </div>
+                    <button class="btn-remove" id="remove-file">✕</button>
+                </div>
+
+                <div class="options">
+                    <label class="option-label">
+                        <span>Oyuncu Sayısı</span>
+                        <select id="num-players">
+                            <option value="1">1 Oyuncu</option>
+                            <option value="2">2 Oyuncu</option>
+                            <option value="3">3 Oyuncu</option>
+                            <option value="4">4 Oyuncu</option>
+                            <option value="5">5 Oyuncu</option>
+                        </select>
+                    </label>
+                </div>
+
+                <button class="btn-analyze" id="btn-start" disabled>
+                    <span>🎯 Devam Et</span>
+                </button>
+            </section>
+
+            <!-- Calibration Section -->
+            <section id="calibration-section" class="card" style="display: none;">
+                <div class="calibration-header">
+                    <h2>🎯 3 Sayı Çizgisini Belirle</h2>
+                    <p>Video üzerinde 3 sayı çizgisini tıklayarak çizin (en az 3 nokta, önerilen 8-15 nokta)</p>
+                </div>
+                
+                <div class="canvas-container">
+                    <canvas id="calibration-canvas"></canvas>
+                    <img id="preview-image" style="display: none;">
+                </div>
+                
+                <div class="calibration-info">
+                    <span id="point-count">Seçilen nokta: 0</span>
+                    <div class="calibration-buttons">
+                        <button class="btn-secondary" id="btn-undo">↩️ Geri Al</button>
+                        <button class="btn-secondary" id="btn-clear">🗑️ Temizle</button>
+                    </div>
+                </div>
+                
+                <div class="calibration-hint">
+                    💡 <strong>İpucu:</strong> 3 sayı çizgisini çizin (yay şeklinde). 
+                    Çizginin <em>içinden</em> (potaya yakın) atılan şutlar 2 sayı, <em>dışından</em> atılanlar 3 sayı olacak.
+                </div>
+                
+                <button class="btn-analyze" id="btn-start-process" disabled>
+                    <span>🚀 Analizi Başlat</span>
+                </button>
+            </section>
+
+            <!-- Processing Section -->
+            <section id="processing-section" class="card" style="display: none;">
+                <div class="processing-content">
+                    <div class="basketball-loader">
+                        <div class="ball"></div>
+                        <div class="shadow"></div>
+                    </div>
+                    <h2 id="status-message">Video işleniyor...</h2>
+                    <div class="progress-container">
+                        <div class="progress-bar" id="progress-bar"></div>
+                        <span class="progress-text" id="progress-text">0%</span>
+                    </div>
+                    <p class="processing-tip">💡 Bu işlem video uzunluğuna bağlı olarak birkaç dakika sürebilir</p>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section id="results-section" class="card" style="display: none;">
+                <div class="results-header">
+                    <h2>📊 Analiz Sonuçları</h2>
+                    <button class="btn-new" id="btn-new-analysis">+ Yeni Analiz</button>
+                </div>
+
+                <div class="results-grid">
+                    <!-- Stats Cards -->
+                    <div class="stat-card accuracy">
+                        <div class="stat-icon">🎯</div>
+                        <div class="stat-value" id="stat-accuracy">0%</div>
+                        <div class="stat-label">Başarı Oranı</div>
+                    </div>
+                    
+                    <div class="stat-card shots">
+                        <div class="stat-icon">🏀</div>
+                        <div class="stat-value">
+                            <span id="stat-made">0</span>/<span id="stat-total">0</span>
+                        </div>
+                        <div class="stat-label">İsabetli / Toplam</div>
+                    </div>
+                    
+                    <div class="stat-card points">
+                        <div class="stat-icon">⭐</div>
+                        <div class="stat-value" id="stat-points">0</div>
+                        <div class="stat-label">Toplam Puan</div>
+                    </div>
+                </div>
+                
+                <div class="points-breakdown">
+                    <span class="two-pt">2PT: <strong id="stat-2pt">0</strong></span>
+                    <span class="three-pt">3PT: <strong id="stat-3pt">0</strong></span>
+                </div>
+
+                <!-- Video Player -->
+                <div class="video-container">
+                    <video id="result-video" controls>
+                        <source src="" type="video/mp4">
+                    </video>
+                </div>
+
+                <div class="download-section">
+                    <a id="download-link" class="btn-download" download>
+                        ⬇️ Videoyu İndir
+                    </a>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Powered by YOLOv8 + DeepSORT</p>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

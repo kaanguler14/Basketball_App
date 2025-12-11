@@ -1,0 +1,23 @@
+# Basketball Shot Analyzer - Web Dependencies
+# ===========================================
+
+# Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# AI/ML
+ultralytics==8.0.196
+torch>=2.0.0
+deep-sort-realtime==1.3.2
+
+# Computer Vision
+opencv-python==4.8.1.78
+cvzone==1.5.6
+numpy>=1.24.0
+
+# Utilities
+Pillow>=9.5.0
+
+
+
