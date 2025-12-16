@@ -1,10 +1,49 @@
-The purpose of this project is to go beyond simple shot counting in basketball.  
-It aims to help players:
-- Control and evaluate their shooting pose
-- Train themselves with feedback
-- Receive guidance to improve shooting technique
+Basketball AI Training App
+Overview
 
-Unlike existing apps that only count shots or focus on dribbling, this project focuses on shooting pose correction and training advice.
+This project focuses on basketball shooting analysis and training, going beyond traditional applications that only count made shots.
+
+The main objective is to analyze a player’s shooting pose, ball trajectory, and shot outcome to provide meaningful feedback that can help improve shooting technique.
+Instead of focusing on dribbling or basic statistics, the system is designed around pose-aware shot understanding and correction.
+
+The application supports outdoor basketball videos and is designed to work with real game or training footage.
+
+Architecture
+
+The system is organized into modular layers to ensure flexibility and extensibility.
+
+flowchart TD
+
+    A[Input Layer<br/>Video / Camera] --> A1[Async Frame Capture]
+
+    A1 --> B[Detection Layer]
+
+    B --> B1[Ball & Rim Detection]
+    B --> B2[Player Detection]
+
+    B1 --> C[Tracking Layer]
+    B2 --> C
+
+    C --> C1[DeepSORT Tracker<br/>Persistent Player IDs]
+    C --> C2[Pose Estimation<br/>17 Keypoints Skeleton]
+
+    C1 --> D[Shot Understanding Layer]
+    C2 --> D
+
+    D --> D1[Shot Detection<br/>Release & Result]
+    D --> D2[Shot Extractor<br/>Clip & Trajectory]
+
+    D1 --> E[Visualization Layer]
+    D2 --> E
+
+    E --> E1[Main Overlay<br/>Ball, Rim, Players, Pose]
+    E --> E2[Minimap<br/>Court & Shot Locations]
+    E --> E3[Scoreboard<br/>Points, Attempts, Percentage]
+
+    E --> F[Output<br/>Visualized Results]
+
+
+Images from Project
 
 ## Current Status
 - A custom dataset has been created 
