@@ -46,7 +46,7 @@ E --> F[Output<br/>Visualized Results]
 ```
 
 
-Images from Project
+##Images from Project
 
 ## Current Status
 - A custom dataset has been created 
