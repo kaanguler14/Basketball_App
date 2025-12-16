@@ -12,35 +12,37 @@ Architecture
 
 The system is organized into modular layers to ensure flexibility and extensibility.
 
+```mermaid
 flowchart TD
 
-    A[Input Layer<br/>Video / Camera] --> A1[Async Frame Capture]
+A[Input Layer<br/>Video / Camera] --> A1[Async Frame Capture]
 
-    A1 --> B[Detection Layer]
+A1 --> B[Detection Layer]
 
-    B --> B1[Ball & Rim Detection]
-    B --> B2[Player Detection]
+B --> B1[Ball & Rim Detection]
+B --> B2[Player Detection]
 
-    B1 --> C[Tracking Layer]
-    B2 --> C
+B1 --> C[Tracking Layer]
+B2 --> C
 
-    C --> C1[DeepSORT Tracker<br/>Persistent Player IDs]
-    C --> C2[Pose Estimation<br/>17 Keypoints Skeleton]
+C --> C1[DeepSORT Tracker<br/>Persistent Player IDs]
+C --> C2[Pose Estimation<br/>17 Keypoints Skeleton]
 
-    C1 --> D[Shot Understanding Layer]
-    C2 --> D
+C1 --> D[Shot Understanding Layer]
+C2 --> D
 
-    D --> D1[Shot Detection<br/>Release & Result]
-    D --> D2[Shot Extractor<br/>Clip & Trajectory]
+D --> D1[Shot Detection<br/>Release & Result]
+D --> D2[Shot Extractor<br/>Clip & Trajectory]
 
-    D1 --> E[Visualization Layer]
-    D2 --> E
+D1 --> E[Visualization Layer]
+D2 --> E
 
-    E --> E1[Main Overlay<br/>Ball, Rim, Players, Pose]
-    E --> E2[Minimap<br/>Court & Shot Locations]
-    E --> E3[Scoreboard<br/>Points, Attempts, Percentage]
+E --> E1[Main Overlay<br/>Ball, Rim, Players, Pose]
+E --> E2[Minimap<br/>Court & Shot Locations]
+E --> E3[Scoreboard<br/>Points, Attempts, Percentage]
 
-    E --> F[Output<br/>Visualized Results]
+E --> F[Output<br/>Visualized Results]
+```
 
 
 Images from Project
