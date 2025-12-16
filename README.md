@@ -1,5 +1,6 @@
-####Basketball AI Training App
-##Overview
+# Basketball AI Training App
+
+## Overview
 
 This project focuses on basketball shooting analysis and training, going beyond traditional applications that only count made shots.
 
