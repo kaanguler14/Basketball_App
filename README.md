@@ -9,7 +9,7 @@ Instead of focusing on dribbling or basic statistics, the system is designed aro
 
 The application supports outdoor basketball videos and is designed to work with real game or training footage.
 
-Architecture
+## Architecture
 
 The system is organized into modular layers to ensure flexibility and extensibility.
 
